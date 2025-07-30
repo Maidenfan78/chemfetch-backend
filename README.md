@@ -1,15 +1,17 @@
 # 📦 ChemFetch Backend
 
-This is the backend API for the ChemFetch platform. It provides barcode lookup, product scraping, OCR integration, and SDS (Safety Data Sheet) retrieval.
+This backend handles barcode lookups, product scraping, and SDS retrieval. A separate Python service performs OCR tasks.
 
 ---
 
 ## 🚀 Features
 
 - `/scan` – Search barcode in Supabase or scrape details from Bing search results
-- `/ocr` – Process and crop image, relay to Python OCR microservice
 - `/confirm` – Save confirmed product name and size
 - `/sds-by-name` – Search for SDS PDF links using product name
+- `/health` – API health & uptime check
+- Rate limiting and input validation built in
+- Structured logging with Pino
 
 ---
 
@@ -17,6 +19,8 @@ This is the backend API for the ChemFetch platform. It provides barcode lookup, 
 
 - Node.js + TypeScript
 - Express.js
+- Pino for structured logging
+- express-rate-limit for abuse protection
 - Puppeteer + Cheerio (for scraping)
 - Sharp (image preprocessing)
 - Supabase Admin SDK
@@ -32,12 +36,14 @@ chemfetch-backend/
 │   ├── index.ts                    # Express app entry point
 │   ├── routes/                    # API route handlers
 │   │   ├── scan.ts
-│   │   ├── ocr.ts
 │   │   ├── confirm.ts
+│   │   ├── health.ts
 │   │   └── sdsByName.ts
 │   ├── utils/                     # Helper modules
 │   │   ├── scraper.ts
 │   │   └── supabaseClient.ts
+│   │   ├── logger.ts
+│   │   └── validation.ts
 ├── ocr_service/
 │   └── ocr_service.py             # Python OCR microservice
 ├── .env                           # Environment variables (not committed)
@@ -64,6 +70,7 @@ SB_SERVICE_KEY=your-service-role-key
 ### 3. Run Python OCR Microservice
 ```bash
 cd ocr_service
+pip install -r requirements.txt
 python ocr_service.py
 ```
 
@@ -82,6 +89,11 @@ docker compose up --build
 ```
 The backend will be available on `http://localhost:3000` and the OCR service on `http://localhost:5001`.
 
+### 6. Run Tests
+```bash
+npm test
+```
+
 ---
 
 ## 🔌 API Endpoints
@@ -94,14 +106,6 @@ The backend will be available on `http://localhost:3000` and the OCR service on 
 ```
 Returns scraped and/or stored product info.
 
-### `POST /ocr`
-```json
-{
-  "image": "base64string",
-  "cropInfo": { left, top, width, height, screenWidth, screenHeight, photoWidth, photoHeight }
-}
-```
-Returns extracted text and structured OCR data.
 
 ### `POST /confirm`
 ```json
