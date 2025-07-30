@@ -75,6 +75,13 @@ cd server
 npx tsx index.ts
 ```
 
+### 5. Docker Deployment
+Build and run both services using Docker Compose:
+```bash
+docker compose up --build
+```
+The backend will be available on `http://localhost:3000` and the OCR service on `http://localhost:5001`.
+
 ---
 
 ## 🔌 API Endpoints
