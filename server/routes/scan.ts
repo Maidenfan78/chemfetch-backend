@@ -3,13 +3,14 @@ import express from 'express';
 import { supabase } from '../utils/supabaseClient';
 import { fetchBingLinks, fetchSdsByName, scrapeProductInfo } from '../utils/scraper';
 import { isValidCode } from '../utils/validation';
+import logger from '../utils/logger';
 
 const router = express.Router();
 
 router.post('/', async (req, res) => {
   const { code } = req.body;
   if (!isValidCode(code)) return res.status(403).json({ error: 'Invalid barcode' });
-  console.log('[SCAN] Searching for barcode:', code);
+  logger.info({ code }, '[SCAN] Searching for barcode');
 
   // Check if already in DB
   const { data: existing, error: fetchErr } = await supabase
