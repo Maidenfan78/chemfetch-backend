@@ -1,12 +1,14 @@
 // server/routes/confirm.ts
 import express from 'express';
 import { supabase } from '../utils/supabaseClient';
+import { isValidCode, isValidName } from '../utils/validation';
 
 const router = express.Router();
 
 router.post('/', async (req, res) => {
   const { code, name = '', size = '' } = req.body;
-  if (!code) return res.status(400).json({ error: 'Missing code' });
+  if (!isValidCode(code)) return res.status(403).json({ error: 'Invalid code' });
+  if (name && !isValidName(name)) return res.status(403).json({ error: 'Invalid name' });
 
   const updates = {
     product_name: name,

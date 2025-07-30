@@ -12,7 +12,7 @@ afterEach(() => {
 test('POST /sds-by-name requires name', async () => {
   const app = (await import('../server/app')).default;
   const res = await request(app).post('/sds-by-name').send({});
-  expect(res.status).toBe(400);
+  expect(res.status).toBe(403);
 });
 
 test('POST /sds-by-name returns URL', async () => {

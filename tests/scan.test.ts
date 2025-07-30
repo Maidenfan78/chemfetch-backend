@@ -22,10 +22,10 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-test('POST /scan returns 400 without code', async () => {
+test('POST /scan returns 403 without code', async () => {
   const app = (await import('../server/app')).default;
   const res = await request(app).post('/scan').send({});
-  expect(res.status).toBe(400);
+  expect(res.status).toBe(403);
 });
 
 test('POST /scan returns existing product and updates SDS', async () => {
