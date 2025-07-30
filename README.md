@@ -124,7 +124,11 @@ Returns a matching SDS PDF URL.
 ---
 
 ## 🧪 Health Check
-You can check PaddleOCR GPU status with:
+The backend exposes a simple health endpoint for uptime checks:
+```
+GET http://localhost:3000/health
+```
+The OCR microservice still provides a GPU status check at:
 ```
 GET http://localhost:5001/gpu-check
 ```

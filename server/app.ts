@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import scanRoute from './routes/scan';
 import confirmRoute from './routes/confirm';
 import sdsByNameRoute from './routes/sdsByName';
+import healthRoute from './routes/health';
 
 dotenv.config();
 
@@ -23,5 +24,6 @@ app.use(limiter);
 app.use('/scan', scanRoute);
 app.use('/confirm', confirmRoute);
 app.use('/sds-by-name', sdsByNameRoute);
+app.use('/health', healthRoute);
 
 export default app;
