@@ -53,7 +53,7 @@ chemfetch-backend/
 ---
 
 ## ⚙️ Setup Instructions
-
+ts
 ### 1. Install Dependencies
 ```bash
 cd server

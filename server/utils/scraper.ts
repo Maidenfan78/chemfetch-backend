@@ -5,6 +5,7 @@ import type { Browser, LaunchOptions } from 'puppeteer';
 import { load } from 'cheerio';
 import { addExtra } from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import logger from './logger';
 
 const pptr = addExtra(puppeteer);
 pptr.use(StealthPlugin());
@@ -33,30 +34,51 @@ export async function closeBrowser() {
 }
 
 export async function fetchBingLinks(term: string): Promise<string[]> {
-  try {
-    const browser = await getBrowser();
-    const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-AU,en;q=0.9' });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)...');
-    await page.setRequestInterception(true);
-    page.on('request', req => {
-      if (["image", "stylesheet", "font", "media"].includes(req.resourceType())) req.abort();
-      else req.continue();
-    });
-    await page.goto(`https://www.bing.com/search?q=${encodeURIComponent(term)}`, { waitUntil: 'domcontentloaded' });
+  const query = `item ${term}`;
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  await page.setViewport({ width: 1366, height: 768 });
+  await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-AU,en;q=0.9' });
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36');
+  await page.setRequestInterception(true);
+
+  page.on('request', req => {
+    if (["image", "stylesheet", "font", "media"].includes(req.resourceType())) req.abort();
+    else req.continue();
+  });
+
+  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+  logger.info({ term: query, searchUrl }, '[SCRAPER] Bing search initiated (Puppeteer)');
+
+try {
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
+    await new Promise(resolve => setTimeout(resolve, 1000)); // allow search results to settle
+
     await page.waitForSelector('li.b_algo h2 a', { timeout: 10000 });
     const links = await page.$$eval('li.b_algo h2 a', els => els.map(a => a.href).slice(0, 5));
     await page.close();
+    logger.info({ term: query, links }, '[SCRAPER] Bing links fetched (Puppeteer)');
     return links;
-  } catch {
+  } catch (err) {
+    logger.warn({ term: query }, '[SCRAPER] Puppeteer failed — falling back to Axios');
+    await page.close();
     return fetchBingLinksFallback(term);
   }
 }
 
 export async function fetchBingLinksFallback(term: string): Promise<string[]> {
+  const query = `item ${term}`;
+  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+  logger.info({ term: query, searchUrl }, '[SCRAPER] Bing search initiated (Axios fallback)');
+
   try {
-    const res = await axios.get(`https://www.bing.com/search?q=${encodeURIComponent(term)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en-AU' },
+    const res = await axios.get(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-AU',
+      },
     });
     const $ = load(res.data);
     const urls: string[] = [];
@@ -64,8 +86,10 @@ export async function fetchBingLinksFallback(term: string): Promise<string[]> {
       const href = $(el).attr('href');
       if (href?.startsWith('http') && urls.length < 5) urls.push(href);
     });
+    logger.info({ term: query, urls }, '[SCRAPER] Bing links fetched (Axios fallback)');
     return urls;
-  } catch {
+  } catch (err) {
+    logger.error({ term: query, err }, '[SCRAPER] Axios fallback failed');
     return [];
   }
 }
