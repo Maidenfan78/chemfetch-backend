@@ -26,12 +26,12 @@ test('POST /confirm returns 403 without code', async () => {
 });
 
 test('POST /confirm updates product', async () => {
-  setupSupabase({ data: { barcode: '123', product_name: 'New', contents_size_weight: '10ml' }, error: null });
+  setupSupabase({ data: { barcode: '123', name: 'New', contents_size_weight: '10ml' }, error: null });
   const app = (await import('../server/app')).default;
 
   const res = await request(app).post('/confirm').send({ code: '123', name: 'New', size: '10ml' });
 
   expect(res.status).toBe(200);
   expect(res.body.success).toBe(true);
-  expect(res.body.product.product_name).toBe('New');
+  expect(res.body.product.name).toBe('New');
 });

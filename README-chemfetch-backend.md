@@ -147,6 +147,43 @@ GET http://localhost:5001/gpu-check
 | Supabase        | supabase.io        |
 
 ---
+### The Schema
+CREATE TABLE product (
+  id SERIAL PRIMARY KEY,
+  barcode TEXT NOT NULL,
+  name TEXT,
+  contents_size_weight TEXT,
+  sds_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
+  CONSTRAINT unique_barcode UNIQUE (barcode)
+);
+user_chemical_watch_list
+Tracks product usage per user (inventory, SDS status, risk info, etc.).
+
+CREATE TABLE user_chemical_watch_list (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  product_id INTEGER REFERENCES product(id) ON DELETE CASCADE,
+  quantity_on_hand INTEGER,
+  location TEXT,
+  sds_available BOOLEAN,
+  sds_issue_date DATE,
+  hazardous_substance BOOLEAN,
+  dangerous_good BOOLEAN,
+  dangerous_goods_class TEXT,
+  description TEXT,
+  packing_group TEXT,
+  subsidiary_risks TEXT,
+  consequence TEXT,
+  likelihood TEXT,
+  risk_rating TEXT,
+  swp_required BOOLEAN,
+  comments_swp TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+🔐 Row-Level Security (RLS)
+RLS is enabled for user_chemical_watch_list to ensure users can only access their own chemical records.
+---
 
 ## 🪪 License
 Internal use only. Add license file if open sourced.

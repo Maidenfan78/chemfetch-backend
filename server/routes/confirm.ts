@@ -13,12 +13,12 @@ router.post('/', async (req, res) => {
   logger.info({ code, name, size }, '[CONFIRM] Updating product');
 
   const updates = {
-    product_name: name,
+    name: name,
     contents_size_weight: size,
   };
 
   const { data, error } = await supabase
-    .from('products')
+    .from('product')
     .update(updates)
     .eq('barcode', code)
     .select()

@@ -13,7 +13,7 @@ router.post('/', async (req, res) => {
   logger.info({ code }, '[SCAN] Searching for barcode');
 
   const { data: existing, error: fetchErr } = await supabase
-    .from('products')
+    .from('product')
     .select('*')
     .eq('barcode', code)
     .maybeSingle();
@@ -23,10 +23,10 @@ router.post('/', async (req, res) => {
   if (existing) {
     let updated = { ...existing };
 
-    if (!existing.sds_url && existing.product_name) {
-      const foundSds = await fetchSdsByName(existing.product_name);
+    if (!existing.sds_url && existing.name) {
+      const foundSds = await fetchSdsByName(existing.name);
       if (foundSds) {
-        await supabase.from('products').update({ sds_url: foundSds }).eq('barcode', code);
+        await supabase.from('product').update({ sds_url: foundSds }).eq('barcode', code);
         updated.sds_url = foundSds;
       }
     }
@@ -36,7 +36,7 @@ router.post('/', async (req, res) => {
       product: updated,
       scraped: [{
         url: '',
-        name: updated.product_name || '',
+        name: updated.name || '',
         size: updated.contents_size_weight || '',
         sdsUrl: updated.sds_url || '',
       }],
@@ -51,7 +51,7 @@ router.post('/', async (req, res) => {
   if (!top.sdsUrl) top.sdsUrl = await fetchSdsByName(top.name);
 
   const { data: found } = await supabase
-    .from('products')
+    .from('product')
     .select('*')
     .eq('barcode', code)
     .maybeSingle();
@@ -59,9 +59,9 @@ router.post('/', async (req, res) => {
   let data, error;
   if (found) {
     const update = await supabase
-      .from('products')
+      .from('product')
       .update({
-        product_name: top.name,
+        name: top.name,
         contents_size_weight: top.size,
         sds_url: top.sdsUrl || null,
       })
@@ -72,10 +72,10 @@ router.post('/', async (req, res) => {
     error = update.error;
   } else {
     const insert = await supabase
-      .from('products')
+      .from('product')
       .insert({
         barcode: code,
-        product_name: top.name,
+        name: top.name,
         contents_size_weight: top.size,
         sds_url: top.sdsUrl || null,
       })

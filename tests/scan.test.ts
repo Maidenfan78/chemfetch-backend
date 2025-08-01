@@ -30,8 +30,8 @@ test('POST /scan returns 403 without code', async () => {
 
 test('POST /scan returns existing product and updates SDS', async () => {
   setupSupabase([
-    { data: { barcode: '123', product_name: 'Test', contents_size_weight: '50ml', sds_url: null }, error: null },
-    { data: { barcode: '123', product_name: 'Test', contents_size_weight: '50ml', sds_url: 'http://sds.com/test.pdf' }, error: null }
+    { data: { barcode: '123', name: 'Test', contents_size_weight: '50ml', sds_url: null }, error: null },
+    { data: { barcode: '123', name: 'Test', contents_size_weight: '50ml', sds_url: 'http://sds.com/test.pdf' }, error: null }
   ]);
   const { fetchSdsByName } = require('../server/utils/scraper');
   (fetchSdsByName as jest.Mock).mockResolvedValue('http://sds.com/test.pdf');
