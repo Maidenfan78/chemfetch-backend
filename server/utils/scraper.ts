@@ -7,13 +7,14 @@ import { addExtra } from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import logger from './logger';
 
-const pptr = addExtra(puppeteer);
-pptr.use(StealthPlugin());
+const usePuppeteer = process.env.USE_PUPPETEER === 'true';
 
 let browserPromise: Promise<Browser> | null = null;
 
-export async function getBrowser(): Promise<Browser> {
+function ensureBrowser(): Promise<Browser> {
   if (!browserPromise) {
+    const pptr = addExtra(puppeteer);
+    pptr.use(StealthPlugin());
     const launchOptions: LaunchOptions = {
       headless: true,
       args: ['--no-sandbox', '--ignore-certificate-errors'],
@@ -33,9 +34,34 @@ export async function closeBrowser() {
   }
 }
 
-export async function fetchBingLinks(term: string): Promise<string[]> {
+async function fetchBingLinksAxios(term: string): Promise<string[]> {
   const query = `item ${term}`;
-  const browser = await getBrowser();
+  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+  logger.info({ term: query, searchUrl }, '[SCRAPER] Bing search initiated (Axios)');
+  try {
+    const res = await axios.get(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-AU',
+      },
+    });
+    const $ = load(res.data);
+    const urls: string[] = [];
+    $('li.b_algo h2 a').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href?.startsWith('http') && urls.length < 5) urls.push(href);
+    });
+    logger.info({ term: query, urls }, '[SCRAPER] Bing links fetched (Axios)');
+    return urls;
+  } catch (err) {
+    logger.error({ term: query, err }, '[SCRAPER] Axios failed');
+    return [];
+  }
+}
+
+async function fetchBingLinksPuppeteer(term: string): Promise<string[]> {
+  const query = `item ${term}`;
+  const browser = await ensureBrowser();
   const page = await browser.newPage();
 
   await page.setViewport({ width: 1366, height: 768 });
@@ -51,47 +77,23 @@ export async function fetchBingLinks(term: string): Promise<string[]> {
 
   const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
   logger.info({ term: query, searchUrl }, '[SCRAPER] Bing search initiated (Puppeteer)');
-
-try {
+  try {
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
-    await new Promise(resolve => setTimeout(resolve, 1000)); // allow search results to settle
-
+    await new Promise(resolve => setTimeout(resolve, 1000));
     await page.waitForSelector('li.b_algo h2 a', { timeout: 10000 });
     const links = await page.$$eval('li.b_algo h2 a', els => els.map(a => a.href).slice(0, 5));
     await page.close();
     logger.info({ term: query, links }, '[SCRAPER] Bing links fetched (Puppeteer)');
     return links;
   } catch (err) {
-    logger.warn({ term: query }, '[SCRAPER] Puppeteer failed — falling back to Axios');
+    logger.warn({ term: query, err }, '[SCRAPER] Puppeteer failed');
     await page.close();
-    return fetchBingLinksFallback(term);
+    return fetchBingLinksAxios(term);
   }
 }
 
-export async function fetchBingLinksFallback(term: string): Promise<string[]> {
-  const query = `item ${term}`;
-  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-  logger.info({ term: query, searchUrl }, '[SCRAPER] Bing search initiated (Axios fallback)');
-
-  try {
-    const res = await axios.get(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-AU',
-      },
-    });
-    const $ = load(res.data);
-    const urls: string[] = [];
-    $('li.b_algo h2 a').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href?.startsWith('http') && urls.length < 5) urls.push(href);
-    });
-    logger.info({ term: query, urls }, '[SCRAPER] Bing links fetched (Axios fallback)');
-    return urls;
-  } catch (err) {
-    logger.error({ term: query, err }, '[SCRAPER] Axios fallback failed');
-    return [];
-  }
+export async function fetchBingLinks(term: string): Promise<string[]> {
+  return usePuppeteer ? fetchBingLinksPuppeteer(term) : fetchBingLinksAxios(term);
 }
 
 export async function scrapeProductInfo(url: string): Promise<{ url: string; name: string; size: string; sdsUrl: string } | null> {
