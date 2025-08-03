@@ -10,6 +10,7 @@ import scanRoute from './routes/scan';
 import confirmRoute from './routes/confirm';
 import sdsByNameRoute from './routes/sdsByName';
 import healthRoute from './routes/health';
+import ocrProxy from './routes/ocrProxy';      // <— NEW
 
 dotenv.config();
 
@@ -19,15 +20,13 @@ app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 app.use(pinoHttp({ logger }));
 
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-});
+const limiter = rateLimit({ windowMs: 60_000, max: 60 });
 app.use(limiter);
 
 app.use('/scan', scanRoute);
 app.use('/confirm', confirmRoute);
 app.use('/sds-by-name', sdsByNameRoute);
 app.use('/health', healthRoute);
+app.use('/ocr', ocrProxy);                     // <— NEW
 
 export default app;

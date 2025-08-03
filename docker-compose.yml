@@ -8,9 +8,10 @@ services:
       - SB_URL=${SB_URL}
       - SB_SERVICE_KEY=${SB_SERVICE_KEY}
       - PORT=3000
+      - OCR_SERVICE_URL=http://ocr:5001
     depends_on:
       - ocr
   ocr:
     build: ./ocr_service
-    ports:
-      - "5001:5001"
+    expose:
+      - "5001"
