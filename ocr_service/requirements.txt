@@ -2,3 +2,4 @@ Flask
 PaddleOCR
 opencv-python-headless
 numpy
+paddlepaddle

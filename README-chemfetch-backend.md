@@ -87,7 +87,7 @@ Build and run both services using Docker Compose:
 ```bash
 docker compose up --build
 ```
-The backend will be available on `http://localhost:3000` and the OCR service on `http://localhost:5001`.
+The backend will be available on `http://localhost:3000` and the OCR service on `http://127.0.0.1:5001`.
 
 ### 6. Run Tests
 ```bash

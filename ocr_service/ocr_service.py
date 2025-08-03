@@ -165,5 +165,7 @@ def ocr():
 
     return jsonify(payload), 200
 
-if __name__ == '__main__':
-    app.run(port=5001, debug=True)
+if __name__ == "__main__":
+    # Listen on every interface so LAN devices & emulators can reach us
+    app.run(host="0.0.0.0", port=5001, debug=False)
+
