@@ -20,14 +20,12 @@ def box_area(box: List[List[float]] | np.ndarray) -> float:
         return float(w * h)
     return float(cv2.contourArea(pts))
 
-
 def box_origin(box: List[List[float]] | np.ndarray) -> Tuple[float, float]:
     """Return the top-left x, y coordinates of a polygon."""
     pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
     x = float(pts[:, 0].min())
     y = float(pts[:, 1].min())
     return x, y
-
 
 def preprocess_array(img: np.ndarray) -> np.ndarray:
     """Enhance contrast and prepare image for OCR."""
@@ -44,21 +42,40 @@ try:
     ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
 except Exception as e:
     raise RuntimeError(
-        "Failed to initialize PaddleOCR."
-        " Ensure paddlepaddle-gpu is installed and CUDA_VISIBLE_DEVICES is correct."
+        "Failed to initialize PaddleOCR. "
+        "Ensure paddlepaddle-gpu is installed and CUDA_VISIBLE_DEVICES is correct."
         f"\nOriginal error: {e}"
     )
 
 @app.route("/gpu-check")
+@app.route("/gpu-check")
 def gpu_check():
     import paddle
+
+    # guard against stub/attribute errors
+    cuda_compiled = False
+    if hasattr(paddle, "is_compiled_with_cuda"):
+        cuda_compiled = paddle.is_compiled_with_cuda()
+
+    device_count = 0
+    # paddle.device.cuda may not exist in all versions
+    try:
+        device_count = paddle.device.cuda.device_count()
+    except Exception:
+        pass
+
     return jsonify({
-        "cuda_compiled": paddle.is_compiled_with_cuda(),
-        "device_count": paddle.device.cuda.device_count()
+        "cuda_compiled": cuda_compiled,
+        "device_count": device_count
     })
+
 
 @app.route('/ocr', methods=['POST'])
 def ocr():
+    # --- Debug logging ---
+    print(f"[OCR Service] Incoming Headers: {dict(request.headers)}")
+    print(f"[OCR Service] Form keys: {list(request.form.keys())}, Files: {list(request.files.keys())}")
+    # ---------------------
     files = request.files.getlist('image')
     if not files:
         return jsonify({'error': 'No image uploaded'}), 400
@@ -113,20 +130,11 @@ def ocr():
 
     for item in result:
         if isinstance(item, dict):
-            raw_boxes = item.get('rec_boxes')
-            if raw_boxes is None:
-                raw_boxes = item.get('boxes', [])
-            raw_texts = item.get('rec_texts')
-            if raw_texts is None:
-                raw_texts = item.get('texts', [])
-            raw_scores = item.get('rec_scores')
-            if raw_scores is None:
-                raw_scores = item.get('scores', [None] * len(raw_texts))
+            raw_boxes = item.get('rec_boxes') or item.get('boxes', [])
+            raw_texts = item.get('rec_texts') or item.get('texts', [])
+            raw_scores = item.get('rec_scores') or item.get('scores', [None] * len(raw_texts))
 
-            boxes = list(raw_boxes)
-            texts = list(raw_texts)
-            scores = list(raw_scores)
-            for box, txt, conf in zip(boxes, texts, scores):
+            for box, txt, conf in zip(raw_boxes, raw_texts, raw_scores):
                 lines.append({
                     'text': txt,
                     'confidence': float(conf or 1.0),
@@ -143,6 +151,7 @@ def ocr():
                 'area': box_area(box)
             })
 
+    # Filter out small boxes
     if lines:
         max_area = max(l['area'] for l in lines)
         area_threshold = 0.3 * max_area
@@ -151,11 +160,11 @@ def ocr():
     else:
         filtered = []
 
-    full_text: List[str] = [l['text'] for l in filtered]
+    full_text = '\n'.join(l['text'] for l in filtered)
 
     payload: Dict[str, Any] = {
         'lines': filtered,
-        'text': '\n'.join(full_text)
+        'text': full_text
     }
     if debug_mode:
         payload['debug'] = {
@@ -168,4 +177,3 @@ def ocr():
 if __name__ == "__main__":
     # Listen on every interface so LAN devices & emulators can reach us
     app.run(host="0.0.0.0", port=5001, debug=False)
-
