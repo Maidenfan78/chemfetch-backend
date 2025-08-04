@@ -171,19 +171,35 @@ def ocr():
 
     # OCR inference
     try:
-        result = ocr_model.predict(proc)
+        result = ocr_model.ocr(proc, cls=True)
+        print(f"[OCR] Raw result: {json.dumps(result, indent=2)}")
     except Exception as e:
         return jsonify({'error': f'OCR failed: {e}'}), 500
 
-    # Parse results placeholder
+    # Parse results
     lines: List[Dict[str, Any]] = []
-    text = ''.join(l['text'] for l in lines)
+    text_parts = []
+    for idx, line in enumerate(result):
+        if not line:
+            continue
+        for box, (txt, score) in line:
+            print(f"[OCR] Line {idx}: text='{txt}', score={score}")
+            lines.append({
+                "text": txt,
+                "confidence": float(score),
+                "box": box
+            })
+            text_parts.append(txt)
 
+    text = "\n".join(text_parts)
     resp = {'lines': lines, 'text': text}
+
+    # Return debug info
     if save_images or debug_mode:
         resp['debug'] = {'tag': tag, 'saved_images': save_images}
 
     return jsonify(resp), 200
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=False)
