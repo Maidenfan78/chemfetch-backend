@@ -1,225 +1,189 @@
 import os
+import json
 import tempfile
-import cv2
-import numpy as np
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
+
+import cv2
+import numpy as np
 from flask import Flask, request, jsonify
 from paddleocr import PaddleOCR
+from PIL import Image
 
 # -----------------------------------------------------------------------------
 # Environment & global config
 # -----------------------------------------------------------------------------
-
-# Force‑select GPU 0 (if multiple) and silence verbose paddle logs
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 os.environ.setdefault("FLAGS_log_dir", tempfile.gettempdir())
 
 app = Flask(__name__)
-
-# Debug image dumping (set DEBUG_IMAGES=1 to enable, or pass ?mode=debug)
+# Debug image dumping via env var or ?mode=debug
 DEBUG_IMAGES_ENV = os.getenv("DEBUG_IMAGES", "0") == "1"
-DEBUG_DIR = Path("debug_images")  # add to .gitignore in the repo root
+DEBUG_DIR = Path("debug_images")
 DEBUG_DIR.mkdir(exist_ok=True)
 
 # -----------------------------------------------------------------------------
-# Utility helpers
+# Helpers
 # -----------------------------------------------------------------------------
 
 def box_area(box: List[List[float]] | np.ndarray) -> float:
-    """Compute the area of a quadrilateral or its bounding rectangle."""
     pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
-    if pts.shape[0] < 3:  # fallback to bounding‑rect for degenerate cases
+    if pts.shape[0] < 3:
         _, _, w, h = cv2.boundingRect(pts.astype(np.int32))
         return float(w * h)
     return float(cv2.contourArea(pts))
 
 
 def box_origin(box: List[List[float]] | np.ndarray) -> Tuple[float, float]:
-    """Return the top‑left (x, y) coordinates of a polygon."""
     pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
-    x = float(pts[:, 0].min())
-    y = float(pts[:, 1].min())
-    return x, y
+    return float(pts[:, 0].min()), float(pts[:, 1].min())
+
+
+def resize_to_max_side(img: Image.Image, max_side: int) -> Image.Image:
+    w, h = img.size
+    scale = min(max_side / w, max_side / h, 1.0)
+    new_w, new_h = int(w * scale), int(h * scale)
+    return img.resize((new_w, new_h))
+
+
+def pil_to_cv(img: Image.Image) -> np.ndarray:
+    arr = np.array(img.convert("RGB"))
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
 def preprocess_array(img: np.ndarray) -> np.ndarray:
-    """Enhance contrast and prepare image for OCR."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
 # -----------------------------------------------------------------------------
-# Model initialisation
+# Initialize OCR model
 # -----------------------------------------------------------------------------
-
 try:
-    ocr_model = PaddleOCR(use_angle_cls=True, lang='en')  # GPU auto‑selected
+    ocr_model = PaddleOCR(use_angle_cls=True, lang="en")
 except Exception as e:
-    raise RuntimeError(
-        "Failed to initialise PaddleOCR. "
-        "Ensure paddlepaddle‑gpu is installed and CUDA_VISIBLE_DEVICES is correct."\
-        f"\nOriginal error: {e}"
-    )
+    raise RuntimeError(f"Failed to initialize PaddleOCR: {e}")
 
 # -----------------------------------------------------------------------------
-# Health‑check endpoint
+# Health check
 # -----------------------------------------------------------------------------
-
 @app.route("/gpu-check")
 def gpu_check():
-    """Simple endpoint to verify CUDA availability inside the container/host."""
     import paddle
-
-    cuda_compiled = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+    compiled = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
     try:
-        device_count = paddle.device.cuda.device_count()
-    except Exception:  # pragma: no cover – device API may differ per version
-        device_count = 0
-
-    return jsonify({
-        "cuda_compiled": cuda_compiled,
-        "device_count": device_count,
-    })
+        count = paddle.device.cuda.device_count()
+    except Exception:
+        count = 0
+    return jsonify({"cuda_compiled": compiled, "device_count": count})
 
 # -----------------------------------------------------------------------------
-# Main OCR endpoint
+# OCR endpoint
 # -----------------------------------------------------------------------------
-
 @app.route('/ocr', methods=['POST'])
 def ocr():
-    # --- Debug logging --------------------------------------------------------
-    print(f"[OCR Service] Incoming Headers: {dict(request.headers)}")
-    print(f"[OCR Service] Form keys: {list(request.form.keys())}, Files: {list(request.files.keys())}")
-    # -------------------------------------------------------------------------
+    print("[OCR] Form keys:", list(request.form.keys()), "Files:", list(request.files.keys()))
 
-    files = request.files.getlist('image')
-    if not files:
+    file = request.files.get('image')
+    if not file:
         return jsonify({'error': 'No image uploaded'}), 400
 
-    # Parse optional crop parameters (left/top/width/height)
+    # Parse crop coords
     try:
         left = int(request.form.get('left', 0))
         top = int(request.form.get('top', 0))
         width = int(request.form.get('width', 0))
         height = int(request.form.get('height', 0))
-        use_crop = width > 0 and height > 0
     except ValueError:
-        return jsonify({'error': 'Invalid crop parameters'}), 400
+        left = top = width = height = 0
+    # Legacy JSON crop:
+    if width == 0 and height == 0 and 'crop' in request.form:
+        try:
+            c = json.loads(request.form['crop'])
+            left = int(c.get('left', 0))
+            top = int(c.get('top', 0))
+            width = int(c.get('width', 0))
+            height = int(c.get('height', 0))
+        except Exception:
+            left = top = width = height = 0
 
-    # Debug / image‑dump mode
     debug_mode = request.args.get('mode') == 'debug'
     save_images = DEBUG_IMAGES_ENV or debug_mode
-    req_tag = datetime.utcnow().strftime('%Y%m%dT%H%M%S_%f')
+    tag = datetime.utcnow().strftime('%Y%m%dT%H%M%S_%f')
 
-    processed_imgs: List[np.ndarray] = []
+    # Open full-resolution image
+    img_stream = BytesIO(file.read())
+    full = Image.open(img_stream)
+    if save_images:
+        full_path = DEBUG_DIR / f"{tag}_full.jpg"
+        full.save(full_path)
+        print(f"[OCR] Saved full image to {full_path}")
 
-    for idx, f in enumerate(files):
-        img_bytes = f.read()
-        npimg = np.frombuffer(img_bytes, np.uint8)
-        orig_full = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        if orig_full is None:
-            return jsonify({'error': 'Image decoding failed'}), 400
-
-        # Expand crop slightly to capture borders
-        if use_crop:
-            h_full, w_full = orig_full.shape[:2]
-            pad_w = int(0.05 * width)
-            pad_h = int(0.05 * height)
-            x1 = max(0, left - pad_w)
-            y1 = max(0, top - pad_h)
-            x2 = min(w_full, left + width + pad_w)
-            y2 = min(h_full, top + height + pad_h)
-            orig = orig_full[y1:y2, x1:x2]
-        else:
-            orig = orig_full
-
-        if save_images:
-            cv2.imwrite(str(DEBUG_DIR / f"{req_tag}_{idx}_orig.jpg"), orig)
-
-        try:
-            processed = preprocess_array(orig)
-        except Exception as e:
-            return jsonify({'error': f'Image processing failed: {e}'}), 400
-
-        if save_images:
-            cv2.imwrite(str(DEBUG_DIR / f"{req_tag}_{idx}_proc.jpg"), processed)
-
-        processed_imgs.append(processed)
-
-    # -------------------- OCR inference --------------------------------------
+    # Parse screen dims for correct scaling
     try:
-        result = ocr_model.predict(processed_imgs[0] if len(processed_imgs) == 1 else processed_imgs)
+        screen_w = float(request.form.get('screenWidth', 0))
+        screen_h = float(request.form.get('screenHeight', 0))
+    except ValueError:
+        screen_w = screen_h = 0.0
+    if screen_w > 0 and screen_h > 0:
+        sx = full.width / screen_w
+        sy = full.height / screen_h
+    else:
+        sx = sy = 1.0
+    print(f"[OCR] full={full.width}x{full.height}, screen={screen_w}x{screen_h}, sx={sx:.2f}, sy={sy:.2f}")
+
+    # Crop on full-res with proper scaling
+    if width > 0 and height > 0:
+        l = int(left * sx)
+        t = int(top * sy)
+        w = int(width * sx)
+        h = int(height * sy)
+        print(f"[OCR] crop full-res: l={l}, t={t}, w={w}, h={h}")
+        roi = full.crop((l, t, l + w, t + h))
+    else:
+        roi = full
+    if save_images:
+        crop_path = DEBUG_DIR / f"{tag}_crop.jpg"
+        roi.save(crop_path)
+        print(f"[OCR] Saved cropped image to {crop_path}")
+
+    # Down-scale to limit
+    scaled = resize_to_max_side(roi, max_side=4000)
+    if save_images:
+        scaled_path = DEBUG_DIR / f"{tag}_scaled.jpg"
+        scaled.save(scaled_path)
+        print(f"[OCR] Saved scaled image to {scaled_path}")
+
+    # To OpenCV
+    cv_img = pil_to_cv(scaled)
+    # Preprocess
+    try:
+        proc = preprocess_array(cv_img)
+    except Exception as e:
+        return jsonify({'error': f'Preprocess failed: {e}'}), 400
+    if save_images:
+        proc_path = DEBUG_DIR / f"{tag}_proc.jpg"
+        cv2.imwrite(str(proc_path), proc)
+        print(f"[OCR] Saved processed image to {proc_path}")
+
+    # OCR inference
+    try:
+        result = ocr_model.predict(proc)
     except Exception as e:
         return jsonify({'error': f'OCR failed: {e}'}), 500
 
-    # -------------------- Post‑processing ------------------------------------
+    # Parse results placeholder
     lines: List[Dict[str, Any]] = []
+    text = ''.join(l['text'] for l in lines)
 
-    for item in result:
-        if isinstance(item, dict):
-            # Avoid ndarray truth‑value errors – use explicit None check
-            raw_boxes = item.get('rec_boxes')
-            if raw_boxes is None:
-                raw_boxes = item.get('boxes', [])
+    resp = {'lines': lines, 'text': text}
+    if save_images or debug_mode:
+        resp['debug'] = {'tag': tag, 'saved_images': save_images}
 
-            raw_texts = item.get('rec_texts')
-            if raw_texts is None:
-                raw_texts = item.get('texts', [])
+    return jsonify(resp), 200
 
-            raw_scores = item.get('rec_scores')
-            if raw_scores is None:
-                raw_scores = item.get('scores', [None] * len(raw_texts))
-
-            for box, txt, conf in zip(raw_boxes, raw_texts, raw_scores):
-                lines.append({
-                    'text': txt,
-                    'confidence': float(conf or 1.0),
-                    'box': np.asarray(box, float).reshape(-1, 2).tolist(),
-                    'area': box_area(box),
-                })
-
-        elif isinstance(item, (list, tuple)) and len(item) >= 2:
-            box, (txt, conf) = item[0], item[1]
-            lines.append({
-                'text': txt,
-                'confidence': float(conf),
-                'box': np.asarray(box, float).reshape(-1, 2).tolist(),
-                'area': box_area(box),
-            })
-
-    # Filter out very small boxes – keeps the most relevant text
-    if lines:
-        max_area = max(l['area'] for l in lines)
-        area_threshold = 0.30 * max_area
-        filtered = [l for l in lines if l['area'] >= area_threshold]
-        filtered.sort(key=lambda l: (box_origin(l['box'])[1], box_origin(l['box'])[0]))
-    else:
-        filtered = []
-
-    full_text = '\n'.join(l['text'] for l in filtered)
-
-    payload: Dict[str, Any] = {
-        'lines': filtered,
-        'text': full_text,
-    }
-
-    if debug_mode or save_images:
-        payload['debug'] = {
-            'n_lines': len(lines),
-            'n_filtered': len(filtered),
-            'saved_images': save_images,
-            'tag': req_tag,
-        }
-
-    return jsonify(payload), 200
-
-# -----------------------------------------------------------------------------
-# Entrypoint
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    # Listen on every interface so LAN devices & emulators can reach us
-    app.run(host="0.0.0.0", port=5001, debug=False)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=False)
