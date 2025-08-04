@@ -15,43 +15,38 @@ const router = Router();
 router.use(
   '/',
   createProxyMiddleware(
-    (
-      {
-        target: OCR_SERVICE_URL,
-        changeOrigin: true,
-        pathRewrite: () => '/ocr', // always forward as /ocr
+    {
+      target: OCR_SERVICE_URL,
+      changeOrigin: true,
+      pathRewrite: () => '/ocr', // always forward as /ocr
 
-        // @ts-ignore: logLevel is supported by http-proxy-middleware but missing from our d.ts
-        logLevel: 'debug',
+      // @ts-ignore: logLevel is supported by http-proxy-middleware but missing from our d.ts
+      logLevel: 'debug',
 
-        onProxyReq: (proxyReq, req, res) => {
-          console.log(
-            '[OCR Proxy] ProxyReq:',
-            new Date().toISOString(),
-            req.method,
-            '→',
-            `${OCR_SERVICE_URL}/ocr`,
-            'headers:',
-            req.headers
-          );
-        },
+      onProxyReq: (proxyReq, req, res) => {
+        console.log(
+          '[OCR Proxy ▶︎ Python]',
+          new Date().toISOString(),
+          'method:', proxyReq.method,
+          'path:', proxyReq.path,
+          'content-type:', proxyReq.getHeader('content-type'),
+          'content-length:', proxyReq.getHeader('content-length')
+        );
+      },
 
-        onProxyRes: (proxyRes, req, res) => {
-          console.log(
-            '[OCR Proxy] ProxyRes:',
-            new Date().toISOString(),
-            'status:',
-            proxyRes.statusCode,
-            'headers:',
-            proxyRes.headers
-          );
-        },
+      onProxyRes: (proxyRes, req, res) => {
+        console.log(
+          '[OCR Python ◀︎ Proxy]',
+          new Date().toISOString(),
+          'status:', proxyRes.statusCode,
+          'headers:', proxyRes.headers
+        );
+      },
 
-        headers: {
-          'X-Forwarded-By': 'chemfetch-backend',
-        },
-      } as any
-    )
+      headers: {
+        'X-Forwarded-By': 'chemfetch-backend',
+      },
+    } as any
   )
 );
 

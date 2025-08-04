@@ -1,165 +1,192 @@
-# 📦 ChemFetch Backend
+# 📦 ChemFetch Backend
 
-This backend handles barcode lookups, product scraping, and SDS retrieval. A separate Python service performs OCR tasks.
+*Backend API & headless scraper for the ****ChemFetch**** platform*
 
----
-
-## 🚀 Features
-
-- `/scan` – Search barcode in Supabase or scrape details from Bing search results
-- `/confirm` – Save confirmed product name and size
-- `/sds-by-name` – Search for SDS PDF links using product name
-- `/health` – API health & uptime check
-- Rate limiting and input validation built in
-- Structured logging with Pino
+This service powers **chemfetch‑mobile** (barcode & OCR capture) and **chemfetch‑client‑hub** (web dashboard).  It handles barcode look‑ups, product scraping, OCR relaying, and SDS discovery, then persists everything to Supabase.
 
 ---
 
-## 🛠 Tech Stack
+## 🚀 Core Features
 
-- Node.js + TypeScript
-- Express.js
-- Pino for structured logging
-- express-rate-limit for abuse protection
-- Puppeteer + Cheerio (for scraping)
-- Sharp (image preprocessing)
-- Supabase Admin SDK
-- Python OCR microservice (PaddleOCR)
+| Endpoint       | Method   | Purpose                                                                                                        |
+| -------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `/scan`        | **POST** | Look up a barcode in Supabase → fall back to web‑scrape if not found                                           |
+| `/confirm`     | **POST** | Persist the name / size chosen by the user after OCR review                                                    |
+| `/sds-by-name` | **POST** | Given a product name, crawl the web for a matching **PDF** SDS link                                            |
+| `/ocr`         | **POST** | **NEW** – Proxy image/crop details to the Python PaddleOCR micro‑service and stream the result back to the app |
+| `/health`      | **GET**  | Lightweight readiness / uptime probe                                                                           |
+
+Additional behaviour:
+
+- **Rate‑limiting & Zod input validation** on every mutating route.
+- **Graceful shutdown** – SIGINT / SIGTERM closes Puppeteer before exit.
+- Structured JSON logging with **Pino**.
+- Transparent caching: successful scrapes are stored to avoid repeated external queries.
 
 ---
 
-## 📁 Folder Structure
+## 🛠️ Tech Stack
+
+- **Node.js 18** + **TypeScript** (ESM)
+- **Express 5**
+- **tsx** runtime for zero‑build local dev (`npx tsx server/index.ts`)
+- **Puppeteer** (headless Chromium) & **Cheerio** (HTML parsing)
+- **Supabase Admin SDK** for DB writes
+- **express‑rate‑limit** & **helmet** for basic hardening
+- **Zod** for schema validation
+- **Python micro‑service** (Flask + PaddleOCR) – separate container / process
+
+---
+
+## 📁 Project Structure
 
 ```
 chemfetch-backend/
 ├── server/
-│   ├── index.ts                    # Express app entry point
-│   ├── routes/                    # API route handlers
-│   │   ├── scan.ts
-│   │   ├── confirm.ts
-│   │   ├── health.ts
-│   │   └── sdsByName.ts
-│   ├── utils/                     # Helper modules
-│   │   ├── scraper.ts
-│   │   └── supabaseClient.ts
-│   │   ├── logger.ts
-│   │   └── validation.ts
+│   ├── index.ts              # Express bootstrap + graceful shutdown
+│   ├── routes/
+│   │   ├── scan.ts
+│   │   ├── confirm.ts
+│   │   ├── sdsByName.ts
+│   │   ├── ocr.ts            # <-- NEW proxy route
+│   │   └── health.ts
+│   ├── utils/
+│   │   ├── scraper.ts        # Bing → first‑party site scraping
+│   │   ├── supabaseClient.ts # Service‑role client factory
+│   │   ├── logger.ts
+│   │   ├── browser.ts        # Puppeteer singleton & cleanup helper
+│   │   └── validation.ts     # Zod schemas shared by routes
 ├── ocr_service/
-│   └── ocr_service.py             # Python OCR microservice
-├── .env                           # Environment variables (not committed)
-├── README.md                      # You are here
+│   └── ocr_service.py        # PaddleOCR + Flask (GPU optional)
+├── Dockerfile                # Multi‑stage build for Node & Python
+├── docker-compose.yml        # Local stack orchestration
+├── requirements.txt          # Python deps (for OCR service)
+├── .env.example              # Sample env vars
+└── README-chemfetch-backend.md (this file)
 ```
 
 ---
 
-## ⚙️ Setup Instructions
+## ⚙️ Local Setup
 
-### 1. Install Dependencies
+### 1. Clone & Install
+
 ```bash
-cd server
-npm install
+# Node deps
+npm install            # from repo root (installs into ./server)
+
+# Python deps (OCR service)
+pip install -r requirements.txt  # or use a venv/conda
 ```
 
-### 2. Environment Variables
-Create a `.env` file:
+### 2. Environment Variables
+
+Create a `.env` file at the repo root *or* export vars in your shell:
+
 ```env
-SB_URL=https://yourproject.supabase.co
-SB_SERVICE_KEY=your-service-role-key
+# General
+PORT=3000                   # API port (default 3000)
+NODE_ENV=development
+
+# Supabase (service‑role key required for write access)
+SB_URL=https://<project>.supabase.co
+SB_SERVICE_KEY=<service‑role_key>
+
+# OCR micro‑service location (container, VM or LAN IP)
+OCR_API_URL=http://127.0.0.1:5001
 ```
 
-### 3. Run Python OCR Microservice
+> The mobile app reads **EXPO\_PUBLIC\_BACKEND\_API\_URL**; keep that separately in the mobile `.env`.
+
+### 3. Run the OCR micro‑service
+
 ```bash
-cd ocr_service
-pip install -r requirements.txt
-python ocr_service.py
+python ocr_service/ocr_service.py  # listens on 0.0.0.0:5001
 ```
 
-Make sure PaddleOCR is installed and working.
+GPU is used automatically if PaddlePaddle‑GPU is installed and CUDA is available.
 
-### 4. Start Backend API Server
+### 4. Start the API server
+
 ```bash
-cd server
-npx tsx index.ts
+# plain node (good for prod images)
+node --loader tsx server/index.ts
+
+# or with Nodemon for hot reload
+nodemon --watch server --exec "tsx server/index.ts"
 ```
 
-### 5. Docker Deployment
-Build and run both services using Docker Compose:
+The API will now be live on `http://localhost:3000`.
+
+### 5. Docker (optional)
+
+A single‑command local stack:
+
 ```bash
 docker compose up --build
 ```
-The backend will be available on `http://localhost:3000` and the OCR service on `http://127.0.0.1:5001`.
 
-### 6. Run Tests
+This spins up **backend‑api** (Node) + **ocr‑svc** (Python) networks.
+
+### 6. Tests
+
 ```bash
-npm test
+npm run test   # Vitest + Supertest (coming soon)
 ```
 
 ---
 
-## 🔌 API Endpoints
+## 🔌 Example Requests
 
 ### `POST /scan`
-```json
+
+```jsonc
 {
   "code": "93549004"
 }
 ```
-Returns scraped and/or stored product info.
 
+Response → `{ "barcode": "93549004", "name": "Isocol Rubbing Alcohol", ... }`
+
+### `POST /ocr`
+
+`multipart/form-data` with one or more `image` files plus optional crop params (`left`,`top`,`width`,`height`). Returns recognised lines + full text.
 
 ### `POST /confirm`
-```json
+
+```jsonc
 {
   "code": "93549004",
   "name": "Isocol Rubbing Alcohol",
-  "size": "75ml"
+  "size": "75 mL"
 }
 ```
-Updates the existing product entry.
 
 ### `POST /sds-by-name`
-```json
-{
-  "name": "WD-40 Multi-Use Product"
-}
+
+```jsonc
+{ "name": "WD‑40 Multi‑Use Product" }
 ```
-Returns a matching SDS PDF URL.
+
+Returns `{ "sdsUrl": "https://.../WD40_MSDS.pdf" }`.
 
 ---
 
-## 🧪 Health Check
-The backend exposes a simple health endpoint for uptime checks:
-```
-GET http://localhost:3000/health
-```
-The OCR microservice still provides a GPU status check at:
-```
-GET http://localhost:5001/gpu-check
-```
+## 🗄️ Database Schema (Supabase)
 
----
-
-## 📦 Deployment Targets
-| Component       | Suggested Platform |
-|----------------|--------------------|
-| Backend API     | Railway / Render   |
-| OCR Microservice| Fly.io / VPS       |
-| Supabase        | supabase.io        |
-
----
-### The Schema
+```sql
+-- product master table
 CREATE TABLE product (
   id SERIAL PRIMARY KEY,
-  barcode TEXT NOT NULL,
+  barcode TEXT NOT NULL UNIQUE,
   name TEXT,
+  manufacturer TEXT,
   contents_size_weight TEXT,
   sds_url TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
-  CONSTRAINT unique_barcode UNIQUE (barcode)
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
-user_chemical_watch_list
-Tracks product usage per user (inventory, SDS status, risk info, etc.).
 
+-- per‑user inventory & risk info
 CREATE TABLE user_chemical_watch_list (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -179,16 +206,32 @@ CREATE TABLE user_chemical_watch_list (
   risk_rating TEXT,
   swp_required BOOLEAN,
   comments_swp TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
-🔐 Row-Level Security (RLS)
-RLS is enabled for user_chemical_watch_list to ensure users can only access their own chemical records.
----
 
-## 🪪 License
-Internal use only. Add license file if open sourced.
+-- Enable RLS on user_chemical_watch_list so users can only see their own rows
+ALTER TABLE user_chemical_watch_list ENABLE ROW LEVEL SECURITY;
+```
 
 ---
 
-## 👷 Maintainer
-Contact your internal team lead or platform owner for access, issues, or onboarding.
+## 📦 Deployment Matrix
+
+| Component          | Recommended Host                        |
+| ------------------ | --------------------------------------- |
+| Backend API (Node) | Railway, Render, or Fly.io              |
+| OCR service (Py)   | Fly.io / GPU VPS / Azure Container Apps |
+| Supabase DB        | Supabase Cloud                          |
+
+---
+
+## 🪪 License & Contributing
+
+This repository is currently **private / internal**.  Add a LICENSE file and contribution guidelines before open‑sourcing.
+
+---
+
+## 👷 Maintainers
+
+For access, issues, or onboarding, ping **@Sav** on Slack or open a ticket in the internal Jira project `CHEM`.  Cheers!
+
