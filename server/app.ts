@@ -8,7 +8,6 @@ import logger from './utils/logger';
 
 import scanRoute from './routes/scan';
 import confirmRoute from './routes/confirm';
-import sdsByNameRoute from './routes/sdsByName';
 import healthRoute from './routes/health';
 import ocrProxy from './routes/ocrProxy';      // <— NEW
 
@@ -25,7 +24,6 @@ app.use(limiter);
 
 app.use('/scan', scanRoute);
 app.use('/confirm', confirmRoute);
-app.use('/sds-by-name', sdsByNameRoute);
 app.use('/health', healthRoute);
 app.use('/ocr', ocrProxy);                     // <— NEW
 

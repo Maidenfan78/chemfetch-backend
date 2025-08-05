@@ -3,3 +3,5 @@ PaddleOCR
 opencv-python-headless
 numpy
 paddlepaddle
+pdfminer.six
+requests
