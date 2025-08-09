@@ -1,199 +1,107 @@
-# 📦 ChemFetch Backend
+# ChemFetch – Updated Repo Overview & Backend README (workflow‑locked)
 
-*Backend API & headless scraper for the **ChemFetch** platform*
-
-This service powers **chemfetch-mobile** (barcode & OCR capture) and **chemfetch-client-hub** (web dashboard). It handles barcode look‑ups, product scraping, OCR relaying, SDS discovery, and SDS verification, then persists everything to Supabase.
+This document **locks in the end‑to‑end workflow** you described and updates both the **repo overview** and the **backend README** so you can copy/paste into the respective repos.
 
 ---
 
-## 🚀 Core Features
+# 1) Repo Overview (update for AU‑biased, barcode→OCR→SDS flow)
 
-| Endpoint         | Method | Purpose                                                                                              |
-| ---------------- | ------ | ---------------------------------------------------------------------------------------------------- |
-| `/scan`          | **POST** | Look up a barcode in Supabase → fall back to web‑scrape if not found                                  |
-| `/confirm`       | **POST** | Persist the name / size chosen by the user after OCR review                                           |
-| `/sds-by-name`   | **POST** | Given a product name, crawl the web for a matching **PDF** SDS link                                   |
-| `/verify-sds`    | **POST** | Download and scan SDS PDF content to verify it matches product name and SDS keywords                 |
-| `/ocr`           | **POST** | Proxy image/crop details to the Python PaddleOCR micro‑service and stream the result back to clients  |
-| `/ocr/health`    | **GET**  | Quick proxy health check (for Python OCR service readiness)                                          |
-| `/health`        | **GET**  | Lightweight readiness / uptime probe                                                                 |
+## 🔗 Repository Map
 
-Additional behaviour:
+| Repo Name                            | Purpose                                                                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **chemfetch-mobile**                 | Expo app that scans barcodes, captures OCR, shows the **Confirm** screen (Web vs OCR vs Manual) and then requests SDS by chosen name. |
+| **chemfetch-client-hub**             | Next.js dashboard where customers see their chemical register and SDS links/metadata.                                                 |
+| **chemfetch-admin-hub** *(optional)* | Internal control panel for jobs, logs, overrides.                                                                                     |
+| **chemfetch-backend**                | Node + Express API. AU‑biased scraping; barcode lookup; OCR proxy; SDS search & verification; persistence to Supabase.                |
+| **chemfetch-supabase**               | SQL schema, migrations, RLS, optional `sds_metadata` table for parsed facts.                                                          |
 
-- **Rate‑limiting** & **Zod** input validation on every mutating route.
-- **Graceful shutdown** – SIGINT / SIGTERM closes Puppeteer before exit.
-- Structured JSON logging with **Pino**.
-- Transparent caching: successful scrapes are stored to avoid repeated external queries.
-- **SDS content verification**: The backend can now verify if a PDF SDS actually matches the product, based on text checks for product name and keywords (`SDS`, `MSDS`, `Safety Data Sheet`).
+## 🇦🇺 Default Search Locale
 
----
+All web lookups are **AU‑biased**. Scraper must apply: `mkt=en-AU`, `cc=AU`, `Accept-Language: en-AU,en;q=0.9` and (optionally) AU IP/geo bias where supported.
 
-## 🛠️ Tech Stack
+## 🔄 Locked Workflow (current MVP)
 
-- **Node.js 18** + **TypeScript** (ESM)
-- **Express 5**
-- **http-proxy-middleware** for streaming `/ocr` to Python
-- **Puppeteer** (headless Chromium) & **Cheerio** (HTML parsing)
-- **Supabase Admin SDK** for DB writes
-- **express-rate-limit** & **helmet** for basic hardening
-- **Zod** for schema validation
-- **Python micro‑service** (Flask + PaddleOCR + PDF validation) – separate container / process
+1. **Scan → DB check**
 
----
+   * Mobile scans `barcode` and calls `POST /scan { code }`.
+   * Backend checks `product` by `barcode`.
+   * If found, return product immediately (no OCR).
 
-## 📁 Project Structure
+2. **DB miss → Web search (AU) for product name by barcode**
 
-```plain
-chemfetch-backend/
-├── server/
-│   ├── index.ts              # Express bootstrap + graceful shutdown
-│   ├── routes/
-│   │   ├── scan.ts
-│   │   ├── confirm.ts
-│   │   ├── sdsByName.ts
-│   │   ├── ocr.ts            # ← Proxy route using http-proxy-middleware
-│   │   ├── ocrHealth.ts      # ← Optional quick OCR check
-│   │   └── health.ts
-│   ├── utils/
-│   │   ├── scraper.ts        # Bing → first‑party site scraping
-│   │   ├── supabaseClient.ts # Service‑role client factory
-│   │   ├── logger.ts
-│   │   ├── browser.ts        # Puppeteer singleton & cleanup helper
-│   │   └── validation.ts     # Zod schemas shared by routes
-├── ocr_service/
-│   └── ocr_service.py        # PaddleOCR + Flask + SDS PDF verifier
-├── Dockerfile                # Multi‑stage build for Node & Python
-├── docker-compose.yml        # Local stack orchestration
-├── requirements.txt          # Python deps (for OCR service)
-├── .env.example              # Sample env vars for Node + OCR proxy
-└── README-chemfetch-backend.md (this file)
-```
+   * Backend queries **`"Item {barcode}"`** (and may try variants like `"product {barcode}"`).
+   * Scraper extracts **name** and **size/weight** from AU retailers/catalogues.
+   * If this yields a plausible result, return it to the app as **Web candidate**.
 
----
+3. **Parallel OCR fallback** *(to reduce lag)*
 
-## 🏠 Local Setup
+   * If a photo exists, OCR is kicked off in parallel via Python service.
+   * App shows a **Confirm** screen with **3 panels**:
 
-### 1. Clone & Install
+     * **Web** (data from step 2),
+     * **OCR** (top lines + confidence),
+     * **Manual** inputs (name + size).
 
-```bash
-# Install Node dependencies (from repo root)
-npm install            # installs into ./server
+4. **User chooses/enters final name (+ optional size)**
 
-# Install Python deps for OCR service
-pip install -r requirements.txt  # or use a venv/conda
-```
+   * App submits selection to backend `POST /confirm { code, name, size? }` which upserts into `product`.
 
-### 2. Environment Variables
+5. **SDS discovery by name (AU)**
 
-Create a `.env` file at the repo root or export vars in your shell:
+   * Backend queries **`"{name} sds"`** (AU‑biased) and collects **PDF candidates**.
+   * Each PDF is run through **/verify-sds** to ensure it contains:
 
-```env
-# Backend API
-PORT=3000                   # API port (default 3000)
-NODE_ENV=development
+     * the **product name** (string containment, tolerant to casing and common separators), and
+     * any of **SDS / MSDS / Safety Data Sheet**.
+   * First verified match becomes `product.sds_url`.
 
-# Supabase (service‑role key required for write access)
-SB_URL=https://<project>.supabase.co
-SB_SERVICE_KEY=<service-role_key>
+6. **Persistence**
 
-# OCR proxy target
-OCR_SERVICE_URL=http://127.0.0.1:5001  # Python OCR microservice
-```
+   * On success: update `product` (`name`, `contents_size_weight`, `sds_url`).
+   * Optional: enqueue SDS parsing job to populate `sds_metadata` (issue date, DG class, etc.).
 
-> The mobile app reads **EXPO_PUBLIC_BACKEND_API_URL** and **EXPO_PUBLIC_OCR_API_URL**; configure those in mobile’s `.env`.
+## ⚡ Performance notes
 
-### 3. Run the OCR micro‑service
-
-```bash
-python ocr_service/ocr_service.py  # listens on 0.0.0.0:5001
-```
-
-GPU is used automatically if PaddlePaddle‑GPU is installed and CUDA is available.
-
-The OCR microservice now supports **PDF SDS verification** at `POST /verify-sds`. It uses `pdfminer.six` to extract text from SDS PDFs and check for product name + key terms (`SDS`, `MSDS`, etc).
-
-### 4. Start the API server
-
-```bash
-# Production (plain Node)
-node --loader tsx server/index.ts
-
-# Development (with hot reload)
-nodemon --watch server --exec "tsx server/index.ts"
-```
-
-The API will now be live on `http://localhost:3000`.
-
-### 5. Docker (optional)
-
-```bash
-docker compose up --build
-```
-
-This spins up:
-
-- **backend-api** (Node)
-- **ocr-svc** (Python)
-
-### 6. Tests
-
-```bash
-npm run test   # Vitest + Supertest (coming soon)
-```
+* **Do simple HTTP + Cheerio first**; launch **Puppeteer** only when needed.
+* **Parallelize** barcode web search and OCR.
+* **Cache** `barcode → name` and `name → sds_url` (with short TTL for negatives).
+* **Background SDS**: write product immediately and finish SDS lookup in a job; UI shows a pending badge.
 
 ---
 
-## 🔌 Example Requests
+# 2) chemfetch‑backend – README (updated, workflow‑locked)
 
-**POST /scan**
-```jsonc
-{ "code": "93549004" }
-```
+## 📦 ChemFetch Backend
 
-**POST /ocr**
-`multipart/form-data` with one or more `image` files plus optional `left, top, width, height` fields:
+Backend API & headless scraper for the **ChemFetch** platform. Handles barcode lookups, AU‑biased scraping, OCR relaying, SDS discovery & verification, and persistence to Supabase.
 
-Response:
-```json
-{
-  "lines": [ { "text": "...", "confidence": 0.95, "box": [[...]] }, ... ],
-  "text": "Full extracted text",
-  "debug": { "tag": "202508...", "saved_images": true }
-}
-```
+### 🚀 Endpoints (MVP contract)
 
-**POST /confirm**
-```jsonc
-{ "code": "93549004", "name": "Isocol Rubbing Alcohol", "size": "75 mL" }
-```
+| Endpoint       | Method | Purpose                                                                                                                                                                                             |          |                                        |
+| -------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------- |
+| `/scan`        | POST   | **DB lookup by barcode**. On miss, run **AU‑biased web search** for `"Item {barcode}"` and return a **Web candidate** (name + size). May also trigger OCR in parallel (client‑side photo required). |          |                                        |
+| `/confirm`     | POST   | Persist final **name/size** chosen by user (Web vs OCR vs Manual) after the Confirm screen. Upserts into `product` by `barcode`.                                                                    |          |                                        |
+| `/sds-by-name` | POST   | AU‑biased search `"{name} sds"`; return first **verified** SDS PDF URL.                                                                                                                             |          |                                        |
+| `/verify-sds`  | POST   | Download SDS PDF and verify **product name** + (**SDS**                                                                                                                                             | **MSDS** | **Safety Data Sheet**) appear in text. |
+| `/ocr`         | POST   | Proxy image/crop to Python **PaddleOCR** service and return text/lines.                                                                                                                             |          |                                        |
+| `/ocr/health`  | GET    | Quick health check for the OCR proxy.                                                                                                                                                               |          |                                        |
+| `/health`      | GET    | API readiness probe.                                                                                                                                                                                |          |                                        |
 
-**POST /sds-by-name**
-```jsonc
-{ "name": "WD-40 Multi-Use Product" }
-```
-Returns:
-```json
-{ "sdsUrl": "https://.../WD40_MSDS.pdf" }
-```
+> **AU bias:** All search helpers send `mkt=en-AU`, `cc=AU`, and `Accept-Language: en-AU,en;q=0.9`. Prefer AU domains when ranking.
 
-**POST /verify-sds**
-```json
-{
-  "url": "https://example.com/sds.pdf",
-  "name": "Isocol Rubbing Alcohol"
-}
-```
-Returns:
-```json
-{ "verified": true }
-```
+### 🔎 Scraper rules
 
----
+* **Barcode → Name:** query literally **`"Item {barcode}"`**; try `"product {barcode}"` as a fallback. Extract **name** and **size/weight** from first‑party/retailer pages.
+* **Name → SDS:** query **`"{name} sds"`** and prefer **PDF** results. Only forward **PDF URLs** to `/verify-sds`.
+* **Verification:** accept a PDF only if both checks pass:
 
-## 🗄️ Database Schema (Supabase)
+  1. lower‑cased PDF text contains the **product name**; and
+  2. the text contains **`sds`**, **`msds`**, or **`safety data sheet`**.
+
+### 🔐 Data model (Supabase)
 
 ```sql
--- Products master table
 CREATE TABLE product (
   id SERIAL PRIMARY KEY,
   barcode TEXT NOT NULL UNIQUE,
@@ -204,50 +112,114 @@ CREATE TABLE product (
   created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
 
--- Per-user inventory & risk info
-CREATE TABLE user_chemical_watch_list (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  product_id INTEGER REFERENCES product(id) ON DELETE CASCADE,
-  quantity_on_hand INTEGER,
-  location TEXT,
-  sds_available BOOLEAN,
-  sds_issue_date DATE,
-  hazardous_substance BOOLEAN,
-  dangerous_good BOOLEAN,
+-- Optional parsed snapshot (1:1 with product)
+CREATE TABLE sds_metadata (
+  product_id            INTEGER PRIMARY KEY REFERENCES product(id) ON DELETE CASCADE,
+  issue_date            DATE,
+  hazardous_substance   BOOLEAN,
+  dangerous_good        BOOLEAN,
   dangerous_goods_class TEXT,
-  description TEXT,
-  packing_group TEXT,
-  subsidiary_risks TEXT,
-  consequence TEXT,
-  likelihood TEXT,
-  risk_rating TEXT,
-  swp_required BOOLEAN,
-  comments_swp TEXT,
-  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
+  description           TEXT,
+  packing_group         TEXT,
+  subsidiary_risks      TEXT,
+  raw_json              JSONB,
+  created_at            TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
+```
 
-ALTER TABLE user_chemical_watch_list ENABLE ROW LEVEL SECURITY;
+### 🧩 Request examples
+
+**1) /scan**
+
+```jsonc
+{ "code": "93549004" }
+```
+
+**Response (DB hit):**
+
+```jsonc
+{ "found": true, "product": {"id":1, "barcode":"93549004", "name":"Isocol Rubbing Alcohol", "contents_size_weight":"75 mL", "sds_url":"...pdf"} }
+```
+
+**Response (DB miss):**
+
+```jsonc
+{ "found": false, "webCandidate": {"name":"Isocol Rubbing Alcohol", "contents_size_weight":"75 mL"} }
+```
+
+**2) /confirm**
+
+```jsonc
+{ "code": "93549004", "name": "Isocol Rubbing Alcohol", "size": "75 mL" }
+```
+
+**3) /sds-by-name**
+
+```jsonc
+{ "name": "WD-40 Multi-Use Product" }
+```
+
+**Response:**
+
+```jsonc
+{ "sdsUrl": "https://.../WD40_SDS.pdf", "verified": true }
+```
+
+**4) /verify-sds**
+
+```json
+{ "url": "https://example.com/sds.pdf", "name": "Isocol Rubbing Alcohol" }
+```
+
+**Response:**
+
+```json
+{ "verified": true }
+```
+
+### ⚙️ Environment
+
+```env
+PORT=3000
+SB_URL=https://<project>.supabase.co
+SB_SERVICE_KEY=<service-role>
+OCR_SERVICE_URL=http://127.0.0.1:5001
+```
+
+### 🛠️ Implementation checklist (backend)
+
+* [ ] Add `searchAu(query)` helper to inject AU headers/params and domain boosting.
+* [ ] Implement `searchItemByBarcode(barcode)` → returns `{ name, contents_size_weight }`.
+* [ ] Implement `searchSdsByName(name)` → returns verified PDF URL via `/verify-sds`.
+* [ ] In `/scan`, on DB miss, run `searchItemByBarcode` and **do not** block on OCR.
+* [ ] In `/confirm`, upsert `product` and enqueue **SDS lookup** if `sds_url` is empty.
+* [ ] Add caching for (barcode→name) and (name→sds) results.
+* [ ] Graceful shutdown closes Puppeteer; prefer Cheerio first, Puppeteer as fallback.
+
+### 📱 Confirm screen contract (mobile ↔ backend)
+
+* The app must display **three visible choices** with data:
+
+  1. **Web candidate** (from `/scan`),
+  2. **OCR candidate** (from `/ocr`),
+  3. **Manual** (inputs: name + size).
+* On submit, call `/confirm`; then trigger `/sds-by-name` and update once verified.
+
+### 🔧 Performance tips
+
+* Start **web search & OCR in parallel** when practical.
+* Use **range requests** or head checks before full PDF download when the verifier can still succeed; otherwise download once per candidate only.
+* Negative‑cache failing domains/queries briefly to avoid thrash.
+
+### 🐳 Local dev
+
+```bash
+python ocr_service/ocr_service.py   # 0.0.0.0:5001
+node --loader tsx server/index.ts   # API on :3000
 ```
 
 ---
 
-## 📦 Deployment Matrix
+## Changelog (docs)
 
-| Component           | Recommended Host                         |
-| ------------------- | ---------------------------------------- |
-| Backend API (Node)  | Railway, Render, or Fly.io               |
-| OCR service (Python)| Fly.io / GPU VPS / Azure Container Apps  |
-| Supabase DB         | Supabase Cloud                           |
-
----
-
-## 💪 License & Contributing
-
-This repository is currently **private/internal**. Add a `LICENSE` file and contribution guidelines before open‑sourcing.
-
----
-
-## 👷 Maintainers
-
-For access, issues, or onboarding, ping **@Sav** on Slack or open a ticket in the internal Jira project `CHEM`.
+* 2025‑08‑09: Locked **AU‑biased** search; fixed query strings to `"Item {barcode}"` and `"{name} sds"`; clarified Confirm screen; defined SDS PDF verification rules; added performance & caching notes.
