@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import pinoHttp from 'pino-http';
+import sdsByNameRoute from './routes/sdsByName';
 
 import logger from './utils/logger';
 
@@ -17,6 +18,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
+app.use('/sds-by-name', sdsByNameRoute);
 app.use(pinoHttp({ logger }));
 
 const limiter = rateLimit({ windowMs: 60_000, max: 60 });
