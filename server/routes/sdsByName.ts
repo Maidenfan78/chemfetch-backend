@@ -1,7 +1,7 @@
 // server/routes/sdsByName.ts
 import { Router } from "express";
 import { z } from "zod";
-import { searchSdsByName } from "../utils/scraper";
+import { searchSdsByName } from "../utils/scraper.js"; // ensure .js if ESM transpile
 
 const router = Router();
 
