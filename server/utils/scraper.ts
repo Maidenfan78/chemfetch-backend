@@ -39,15 +39,64 @@ function withAuParams(url: string): string {
   return u.toString();
 }
 
+// Add near the other helpers:
+function tryBase64UrlDecode(s: string): string | null {
+  // very loose heuristic: looks like base64 without schema
+  if (!/^[A-Za-z0-9+/_=-]{16,}$/.test(s)) return null;
+  try {
+    // add padding if missing
+    const pad = s.length % 4 === 2 ? '==' : s.length % 4 === 3 ? '=' : '';
+    const decoded = Buffer.from(s + pad, 'base64').toString('utf8');
+    if (/^https?:\/\//i.test(decoded)) return decoded;
+  } catch {}
+  return null;
+}
+
+function normalizeSearchHref(href: string, base?: string): string {
+  // 1) base64-esque blobs → URL
+  const b64 = tryBase64UrlDecode(href);
+  if (b64) return b64;
+
+  // 2) resolve relative
+  let abs = href;
+  try { abs = new URL(href, base || 'https://dummy.local').toString(); } catch {}
+
+  // 3) unwrap Bing /ck/
+  try {
+    const u = new URL(abs, 'https://www.bing.com');
+    if (u.hostname.includes('bing.com') && u.pathname.startsWith('/ck/')) {
+      const real = u.searchParams.get('u');
+      if (real) return decodeURIComponent(real);
+    }
+  } catch {}
+
+  // 4) unwrap DuckDuckGo /l/?uddg=...
+  try {
+    const u = new URL(abs, 'https://duckduckgo.com');
+    if (u.hostname.includes('duckduckgo.com') && u.pathname.startsWith('/l/')) {
+      const real = u.searchParams.get('uddg');
+      if (real) return decodeURIComponent(real);
+    }
+  } catch {}
+
+  return abs;
+}
+
 async function fetchHtml(url: string, cfg: AxiosRequestConfig = {}) {
-  const res = await axios.get<string>(withAuParams(url), {
+  const normalized = normalizeSearchHref(url);
+  if (!/^https?:\/\//i.test(normalized)) {
+    throw new Error(`Refusing to fetch non-HTTP URL: ${url}`);
+  }
+  const res = await axios.get<string>(withAuParams(normalized), {
     ...cfg,
     headers: { ...(cfg.headers || {}), ...auHeaders() },
     timeout: 12_000,
+    maxRedirects: 5,
     validateStatus: (s) => s >= 200 && s < 400,
   });
   return res.data as string;
 }
+
 
 function absolute(href: string, base: string): string {
   try {
@@ -88,14 +137,13 @@ export async function searchAu(query: string): Promise<Array<{ title: string; ur
     const q = encodeURIComponent(query);
     const html = await fetchHtml(`https://www.bing.com/search?q=${q}&mkt=en-AU&cc=AU`);
     const $ = cheerio.load(html);
-    $("li.b_algo h2 a, .b_algo h2 a").each((_, el) => {
-      const title = $(el).text().trim();
-      let href = $(el).attr("href") || "";
-      if (href) {
-        href = normalizeBingCk(href);
-        results.push({ title, url: href });
-      }
-    });
+$("li.b_algo h2 a, .b_algo h2 a").each((_, el) => {
+  const title = $(el).text().trim();
+  const raw = $(el).attr("href") || "";
+  if (!raw) return;
+  const url = normalizeSearchHref(raw, "https://www.bing.com/");
+  results.push({ title, url });
+});
   } catch (err) {
     // ignore, fallback will handle
   }
@@ -107,14 +155,21 @@ export async function searchAu(query: string): Promise<Array<{ title: string; ur
     const q = encodeURIComponent(query);
     const html = await fetchHtml(`https://html.duckduckgo.com/html/?q=${q}&kl=au-en`);
     const $ = cheerio.load(html);
-    $("a.result__a").each((_, el) => {
-      const title = $(el).text().trim();
-      let href = $(el).attr("href") || "";
-      if (href) {
-        href = normalizeBingCk(href);
-        results.push({ title, url: href });
-      }
-    });
+async function fetchHtml(url: string, cfg: AxiosRequestConfig = {}) {
+  const normalized = normalizeSearchHref(url);
+  if (!/^https?:\/\//i.test(normalized)) {
+    throw new Error(`Refusing to fetch non-HTTP URL: ${url}`);
+  }
+  const res = await axios.get<string>(withAuParams(normalized), {
+    ...cfg,
+    headers: { ...(cfg.headers || {}), ...auHeaders() },
+    timeout: 12_000,
+    maxRedirects: 5,
+    validateStatus: (s) => s >= 200 && s < 400,
+  });
+  return res.data as string;
+}
+
   } catch (err) {
     // swallow
   }
