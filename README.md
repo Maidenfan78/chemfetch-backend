@@ -24,6 +24,12 @@ Additional behaviour:
 - Structured JSON logging with **Pino**.
 - Transparent caching: successful scrapes are stored to avoid repeated external queries.
 
+### 🔄 Current Workflow (AU-biased)
+
+1. `/scan` checks Supabase for the barcode. On a miss it performs an AU‑biased search for `"Item {barcode}"` to derive the product name and size.
+2. The mobile app shows the web result, OCR text and manual entry. The chosen name/size is sent to `/confirm`.
+3. The backend searches `"{name} sds"` and verifies the PDF contains the product name and keywords like **SDS**, **MSDS** or **Safety Data Sheet** before storing the URL.
+
 ---
 
 ## 🛠️ Tech Stack

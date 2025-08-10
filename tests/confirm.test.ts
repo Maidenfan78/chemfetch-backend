@@ -4,6 +4,7 @@ process.env.SB_URL = 'http://localhost';
 process.env.SB_SERVICE_KEY = 'key';
 
 jest.mock('../server/utils/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
+jest.mock('../server/utils/scraper', () => ({ searchSdsByName: jest.fn().mockResolvedValue(null) }));
 
 function setupSupabase(response: {data: any; error: any}) {
   const { supabase } = require('../server/utils/supabaseClient');
