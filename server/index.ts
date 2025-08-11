@@ -1,6 +1,5 @@
 // server/index.ts
 import app from "./app";
-import { closeBrowser } from "./utils/scraper";
 import logger from "./utils/logger";
 import ocrProxy from "./routes/ocrProxy";
 
@@ -43,9 +42,6 @@ app.listen(PORT, () =>
 // ---------------------------------------------------------------------------
 // 🛑  Graceful shutdown
 // ---------------------------------------------------------------------------
-process.on("SIGINT", () =>
-  closeBrowser().finally(() => process.exit())
-);
-process.on("SIGTERM", () =>
-  closeBrowser().finally(() => process.exit())
-);
+process.on("SIGINT", () => process.exit());
+process.on("SIGTERM", () => process.exit());
+
