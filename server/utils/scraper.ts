@@ -190,13 +190,24 @@ export async function searchItemByBarcode(
 }
 
 // -----------------------------------------------------------------------------
-// Public: name → SDS (robust PDF finder)
+// Public: name (+ optional size) → SDS (robust PDF finder)
 // -----------------------------------------------------------------------------
-export async function searchSdsByName(name: string): Promise<string | null> {
-  const cached = SDS_CACHE.get(name);
-  if (cached !== undefined) return cached;
+export async function fetchSdsByName(
+  name: string,
+  size?: string
+): Promise<{ sdsUrl: string; topLinks: string[] }> {
+  const cacheKey = size ? `${name}|${size}` : name;
+  const cached = SDS_CACHE.get(cacheKey);
+  if (cached !== undefined)
+    return { sdsUrl: cached || "", topLinks: [] };
 
-  const hits = await searchAu(`${name} sds`);
+  const queryParts = [name];
+  if (size) queryParts.push(size);
+  queryParts.push("SDS", "MSDS", "\"Safety Data Sheet\"");
+  const query = queryParts.join(" ");
+
+  const hits = await searchAu(query);
+  const topLinks = hits.slice(0, 5).map((h) => extractBingTarget(h.url));
 
   for (const h of hits) {
     const first = extractBingTarget(h.url);
@@ -214,8 +225,8 @@ export async function searchSdsByName(name: string): Promise<string | null> {
           const ok = await verifySdsUrl(finalUrl, name);
           if (ok) {
             console.log("[SCRAPER] Valid SDS PDF found", finalUrl);
-            SDS_CACHE.set(name, finalUrl);
-            return finalUrl;
+            SDS_CACHE.set(cacheKey, finalUrl);
+            return { sdsUrl: finalUrl, topLinks };
           }
         }
       }
@@ -228,16 +239,16 @@ export async function searchSdsByName(name: string): Promise<string | null> {
         const ok = await verifySdsUrl(pdf, name);
         if (ok) {
           console.log("[SCRAPER] Valid SDS PDF via page hop", pdf);
-          SDS_CACHE.set(name, pdf);
-          return pdf;
+          SDS_CACHE.set(cacheKey, pdf);
+          return { sdsUrl: pdf, topLinks };
         }
       }
     }
   }
 
   console.log("[SCRAPER] No valid SDS PDF found");
-  SDS_CACHE.set(name, null);
-  return null;
+  SDS_CACHE.set(cacheKey, null);
+  return { sdsUrl: "", topLinks };
 }
 
 // Simple wrapper kept for compatibility
