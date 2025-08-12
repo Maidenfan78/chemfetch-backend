@@ -88,7 +88,6 @@ export async function searchItemByBarcode(barcode: string): Promise<{ name: stri
   for (const query of queries) {
     const hits = await searchAu(query);
     for (const hit of hits.slice(0, 8)) {
-      if (!/\.au\b/i.test(hit.url) && /amazon|aliexpress|ebay/i.test(hit.url)) continue;
       try {
         const html = await fetchHtml(hit.url);
         const $ = cheerio.load(html);
@@ -102,7 +101,7 @@ export async function searchItemByBarcode(barcode: string): Promise<{ name: stri
         if (title) texts.push(title);
 
         const joined = texts.join(" • ");
-        const name = joined.replace(/\s*[-|–]\s*(Buy.*|Bunnings.*|Officeworks.*|Woolworths.*)$/i, "").trim();
+        const name = joined.trim();
         const size = joined.match(/\b(\d+(?:\.\d+)?)\s?(mL|L|g|kg)\b/i)?.[0];
 
         if (name) {
@@ -164,7 +163,7 @@ export async function scrapeProductInfo(url: string): Promise<{ name?: string; c
   if (title) texts.push(title);
 
   const joined = texts.join(" • ");
-  const name = joined.replace(/\s*[-|–]\s*(Buy.*|Bunnings.*|Officeworks.*|Woolworths.*)$/i, "").trim();
+  const name = joined.trim();
   const size = joined.match(/\b(\d+(?:\.\d+)?)\s?(mL|L|g|kg)\b/i)?.[0];
 
   return { name, contents_size_weight: size, url };
