@@ -78,16 +78,11 @@ async function fetchSdsByName(name: string): Promise<{ sdsUrl: string; topLinks:
     for (const href of topLinks) {
       const url = normaliseUrl(href);
       if (!url) continue;
-      const isPdf = url.toLowerCase().includes('.pdf');
-      const host = new URL(url).hostname;
-      const isJunk = host.includes('isocol.com.au');
-      logger.info({ href: url, isPdf, isJunk }, '[SCRAPER] Evaluating SDS link');
-      if (isPdf && !isJunk) {
-        return { sdsUrl: url, topLinks };
-      }
+      logger.info({ href: url }, '[SCRAPER] Evaluating link');
+      return { sdsUrl: url, topLinks };
     }
 
-    logger.info({ links }, '[SCRAPER] No matching SDS PDFs found');
+    logger.info({ links }, '[SCRAPER] No matching links found');
     return { sdsUrl: '', topLinks };
   } catch (err: any) {
     logger.warn({ err: String(err) }, '[SCRAPER] Puppeteer SDS search failed');
