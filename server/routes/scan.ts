@@ -31,6 +31,21 @@ function normaliseUrl(u: string): string | null {
   if (!u) return null;
   let s = String(u).trim();
   try {
+    const parsed = new URL(s);
+    // Unwrap Bing redirect links: https://www.bing.com/ck/a?...&u=<encoded>
+    if (parsed.hostname.includes('bing.com') && parsed.searchParams.has('u')) {
+      let target = parsed.searchParams.get('u') || '';
+      try {
+        if (isProbablyA1Base64(target)) {
+          target = Buffer.from(target.slice(2), 'base64').toString('utf8');
+        } else {
+          target = decodeURIComponent(target);
+        }
+      } catch {}
+      s = target.trim();
+    }
+  } catch {}
+  try {
     if (isProbablyA1Base64(s)) {
       const decoded = Buffer.from(s.slice(2), 'base64').toString('utf8');
       if (decoded.startsWith('http://') || decoded.startsWith('https://')) s = decoded;
