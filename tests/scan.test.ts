@@ -34,7 +34,7 @@ test('POST /scan returns existing product and updates SDS', async () => {
     { data: { barcode: '123', name: 'Test', contents_size_weight: '50ml', sds_url: 'http://sds.com/test.pdf' }, error: null }
   ]);
   const { fetchSdsByName } = require('../server/utils/scraper');
-  (fetchSdsByName as jest.Mock).mockResolvedValue('http://sds.com/test.pdf');
+  (fetchSdsByName as jest.Mock).mockResolvedValue({ sdsUrl: 'http://sds.com/test.pdf', topLinks: [] });
   const app = (await import('../server/app')).default;
 
   const res = await request(app).post('/scan').send({ code: '123' });

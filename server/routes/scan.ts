@@ -1,6 +1,6 @@
 import express from 'express';
 import { supabase } from '../utils/supabaseClient';
-import { fetchBingLinks, scrapeProductInfo } from '../utils/scraper';
+import { fetchBingLinks, scrapeProductInfo, fetchSdsByName } from '../utils/scraper';
 import { isValidCode, isValidName } from '../utils/validation';
 import logger from '../utils/logger';
 import puppeteer from 'puppeteer-extra';
@@ -56,51 +56,16 @@ function normaliseUrl(u: string): string | null {
   return s;
 }
 
-async function fetchSdsByName(name: string): Promise<{ sdsUrl: string; topLinks: string[] }> {
-  const query = `${name} sds pdf`;
-  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&mkt=en-AU&cc=AU`;
-  logger.info({ term: query, searchUrl }, '[SCRAPER] SDS fallback Bing search (Puppeteer)');
-
-  let browser: any;
-  try {
-    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    );
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-
-    const links: string[] = await page.$$eval('li.b_algo h2 a', (anchors) =>
-      anchors.map((a: any) => a.href).filter(Boolean)
-    );
-    const topLinks = links.slice(0, 5);
-
-    for (const href of topLinks) {
-      const url = normaliseUrl(href);
-      if (!url) continue;
-      logger.info({ href: url }, '[SCRAPER] Evaluating link');
-      return { sdsUrl: url, topLinks };
-    }
-
-    logger.info({ links }, '[SCRAPER] No matching links found');
-    return { sdsUrl: '', topLinks };
-  } catch (err: any) {
-    logger.warn({ err: String(err) }, '[SCRAPER] Puppeteer SDS search failed');
-    return { sdsUrl: '', topLinks: [] };
-  } finally {
-    try { await browser?.close(); } catch {}
-  }
-}
 
 // --- Routes ------------------------------------------------------------------
 router.post('/sds-by-name', async (req, res) => {
-  const { name } = req.body || {};
+  const { name, size } = req.body || {};
   if (!isValidName(name)) return res.status(403).json({ error: 'Invalid name' });
 
   try {
-    logger.info({ name }, '[SDS] Fetching by name');
-    const { sdsUrl, topLinks } = await fetchSdsByName(name);
-    logger.info({ name, sdsUrl, topLinks }, '[SDS] Fetched SDS URL and top links');
+    logger.info({ name, size }, '[SDS] Fetching by name');
+    const { sdsUrl, topLinks } = await fetchSdsByName(name, size);
+    logger.info({ name, size, sdsUrl, topLinks }, '[SDS] Fetched SDS URL and top links');
     return res.json({ sdsUrl, topLinks });
   } catch (err: any) {
     logger.error({ err: String(err), name }, '[SDS] Failed');
@@ -129,7 +94,10 @@ router.post('/', async (req, res) => {
       if (!existing.sds_url && existing.name) {
         try {
           logger.info({ name: existing.name }, '[SCAN] Fetching missing SDS URL for existing product');
-          const { sdsUrl: foundSds } = await fetchSdsByName(existing.name);
+          const { sdsUrl: foundSds } = await fetchSdsByName(
+            existing.name,
+            existing.contents_size_weight || undefined
+          );
           logger.info({ name: existing.name, foundSds }, '[SCAN] Fallback SDS result');
           if (foundSds) {
             const updateResult = await supabase
@@ -183,7 +151,10 @@ router.post('/', async (req, res) => {
     if (!top.sdsUrl && top.name) {
       try {
         logger.info({ name: top.name }, '[SCAN] Fetching SDS URL via fallback');
-        const { sdsUrl: fallbackSds, topLinks } = await fetchSdsByName(top.name);
+        const { sdsUrl: fallbackSds, topLinks } = await fetchSdsByName(
+          top.name,
+          top.size ?? top.contents_size_weight
+        );
         logger.info({ name: top.name, fallbackSds, topLinks }, '[SCAN] Fallback SDS result');
         if (fallbackSds) top.sdsUrl = fallbackSds;
       } catch (err: any) {
