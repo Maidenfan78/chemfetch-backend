@@ -3,6 +3,7 @@ import express from 'express';
 import { supabase } from '../utils/supabaseClient';
 import { isValidCode, isValidName } from '../utils/validation';
 import logger from '../utils/logger';
+import { fetchSdsByName } from '../utils/scraper';
 
 const router = express.Router();
 
@@ -35,7 +36,28 @@ router.post('/', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ success: true, product: data });
+  let product = data;
+
+  if (product && !product.sds_url && product.name) {
+    try {
+      const { sdsUrl } = await fetchSdsByName(product.name, product.contents_size_weight || undefined);
+      if (sdsUrl) {
+        const update = await supabase
+          .from('product')
+          .update({ sds_url: sdsUrl })
+          .eq('barcode', code)
+          .select()
+          .maybeSingle();
+        if (!update.error) {
+          product = update.data || { ...product, sds_url: sdsUrl };
+        }
+      }
+    } catch (err: any) {
+      logger.warn({ err: String(err) }, '[CONFIRM] SDS lookup failed');
+    }
+  }
+
+  res.json({ success: true, product });
 });
 
 export default router;
