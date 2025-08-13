@@ -13,6 +13,7 @@ import confirmRoute from './routes/confirm';
 import healthRoute from './routes/health';
 import ocrProxy from './routes/ocrProxy';      // <— NEW
 import verifySdsProxy from './routes/verifySds'; // <— NEW
+import parseSdsRoute from './routes/parseSds';   // <— NEW SDS PARSING
 
 dotenv.config();
 
@@ -31,5 +32,6 @@ app.use('/confirm', confirmRoute);
 app.use('/health', healthRoute);
 app.use('/ocr', ocrProxy);                     // <— NEW
 app.use('/verify-sds', verifySdsProxy);        // <— NEW
+app.use('/parse-sds', parseSdsRoute);          // <— NEW SDS PARSING
 
 export default app;
