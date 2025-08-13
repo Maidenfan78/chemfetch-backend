@@ -10,17 +10,26 @@ router.post('/', async (req, res) => {
   const { code, name = '', size = '' } = req.body;
   if (!isValidCode(code)) return res.status(403).json({ error: 'Invalid code' });
   if (name && !isValidName(name)) return res.status(403).json({ error: 'Invalid name' });
-  logger.info({ code, name, size }, '[CONFIRM] Updating product');
+  logger.info({ code, name, size }, '[CONFIRM] Upserting product');
 
-  const updates = {
-    name: name,
-    contents_size_weight: size,
-  };
+  // Check for existing product to avoid duplicate entries when the user
+  // repeatedly taps "Save & Find SDS". If the incoming payload matches the
+  // current record, return 409 so the client can ignore the duplicate.
+  const { data: existing, error: fetchErr } = await supabase
+    .from('product')
+    .select('barcode, name, contents_size_weight')
+    .eq('barcode', code)
+    .maybeSingle();
+
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+
+  if (existing && existing.name === name && existing.contents_size_weight === size) {
+    return res.status(409).json({ error: 'Product already registered', product: existing });
+  }
 
   const { data, error } = await supabase
     .from('product')
-    .update(updates)
-    .eq('barcode', code)
+    .upsert({ barcode: code, name, contents_size_weight: size }, { onConflict: 'barcode' })
     .select()
     .maybeSingle();
 
