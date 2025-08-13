@@ -3,7 +3,6 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
 import logger from '../utils/logger';
-import { createServiceRoleClient } from '../utils/supabaseClient';
 
 const router = Router();
 
