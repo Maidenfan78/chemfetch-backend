@@ -8,3 +8,10 @@ export const supabase = createClient(
   process.env.SB_URL || '',
   process.env.SB_SERVICE_KEY || ''
 );
+
+export function createServiceRoleClient() {
+  return createClient(
+    process.env.SB_URL || '',
+    process.env.SB_SERVICE_KEY || ''
+  );
+}
