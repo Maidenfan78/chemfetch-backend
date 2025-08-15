@@ -15,6 +15,20 @@ from paddleocr import PaddleOCR
 from PIL import Image
 
 # -----------------------------------------------------------------------------
+# Try to import parse_sds_pdf from the local module. Provide a fallback path if
+# the service is started from project root.
+# -----------------------------------------------------------------------------
+try:
+    from parse_sds import parse_sds_pdf  # when running inside ocr_service
+except Exception:
+    try:
+        # Fallback if app is executed from project root and ocr_service is a pkg
+        from ocr_service.parse_sds import parse_sds_pdf  # type: ignore
+    except Exception as e:
+        parse_sds_pdf = None  # will be checked before use
+        _import_err = e
+
+# -----------------------------------------------------------------------------
 # Environment & global config
 # -----------------------------------------------------------------------------
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -36,9 +50,11 @@ def box_area(box: List[List[float]] | np.ndarray) -> float:
         return float(w * h)
     return float(cv2.contourArea(pts))
 
+
 def box_origin(box: List[List[float]] | np.ndarray) -> Tuple[float, float]:
     pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
     return float(pts[:, 0].min()), float(pts[:, 1].min())
+
 
 def resize_to_max_side(img: Image.Image, max_side: int) -> Image.Image:
     w, h = img.size
@@ -46,9 +62,11 @@ def resize_to_max_side(img: Image.Image, max_side: int) -> Image.Image:
     new_w, new_h = int(w * scale), int(h * scale)
     return img.resize((new_w, new_h))
 
+
 def pil_to_cv(img: Image.Image) -> np.ndarray:
     arr = np.array(img.convert("RGB"))
     return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
 
 def preprocess_array(img: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -64,7 +82,7 @@ try:
         lang="en",
         det_model_dir=None,
         rec_model_dir=None,
-        use_angle_cls=True
+        use_angle_cls=True,
     )
 except Exception as e:
     raise RuntimeError(f"Failed to initialize PaddleOCR: {e}")
@@ -75,6 +93,7 @@ except Exception as e:
 @app.route("/gpu-check")
 def gpu_check():
     import paddle
+
     compiled = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
     try:
         count = paddle.device.cuda.device_count()
@@ -184,7 +203,7 @@ def ocr():
                     box = entry[0]
                     txt = entry[1][0]
                     score = entry[1][1]
-                except Exception as e:
+                except Exception:
                     continue
                 lines.append({
                     "text": txt,
@@ -203,6 +222,7 @@ def ocr():
 # -----------------------------------------------------------------------------
 # PDF SDS Verification Endpoint
 # -----------------------------------------------------------------------------
+
 def verify_pdf_sds(url: str, product_name: str, keywords=None) -> bool:
     keywords = keywords or ["SDS", "MSDS", "Safety Data Sheet"]
     try:
@@ -218,6 +238,7 @@ def verify_pdf_sds(url: str, product_name: str, keywords=None) -> bool:
         print(f"[verify_pdf_sds] Failed to verify {url}: {e}")
         return False
 
+
 @app.route('/verify-sds', methods=['POST'])
 def verify_sds():
     data = request.json or {}
@@ -228,6 +249,57 @@ def verify_sds():
 
     verified = verify_pdf_sds(url, name)
     return jsonify({'verified': verified}), 200
+
+# -----------------------------------------------------------------------------
+# NEW: Parse SDS over HTTP (reuses parse_sds.parse_sds_pdf)
+# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------------
+# NEW: Parse SDS over HTTP (reuses parse_sds.parse_sds_pdf)
+# -------------------------------------------------------------------------
+@app.route('/parse-sds', methods=['POST'])
+def parse_sds_http():
+    """
+    Body: { "product_id": 123, "pdf_url": "https://..." }
+    Returns: Parsed fields suitable for upsert into sds_metadata.
+    """
+    if parse_sds_pdf is None:
+        # Avoid syntax errors by building string normally
+        err_msg = f"parse_sds_pdf could not be imported: {_import_err}" if '_import_err' in globals() else "Unknown import error"
+        return jsonify({"error": err_msg}), 500
+
+    data = request.json or {}
+    product_id = data.get("product_id")
+    pdf_url = data.get("pdf_url")
+
+    if not product_id or not pdf_url:
+        return jsonify({"error": "Missing product_id or pdf_url"}), 400
+
+    try:
+        parsed = parse_sds_pdf(pdf_url, product_id=int(product_id))
+
+        def _get(attr, default=None):
+            if hasattr(parsed, attr):
+                return getattr(parsed, attr)
+            if isinstance(parsed, dict):
+                return parsed.get(attr, default)
+            return default
+
+        return jsonify({
+            "product_id": _get("product_id", int(product_id)),
+            "vendor": _get("vendor"),
+            "issue_date": _get("issue_date"),
+            "hazardous_substance": _get("hazardous_substance"),
+            "dangerous_good": _get("dangerous_good"),
+            "dangerous_goods_class": _get("dangerous_goods_class"),
+            "packing_group": _get("packing_group"),
+            "subsidiary_risks": _get("subsidiary_risks"),
+            "hazard_statements": _get("hazard_statements", []),
+            "raw_json": _get("raw_json"),
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"parse_sds failed: {e}"}), 500
+    
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=False)
