@@ -52,6 +52,7 @@ PATTERNS: Dict[str, re.Pattern] = {
     "product_identifier": re.compile(r"(?:(?:Product\s*(?:name|identifier))|Trade\s*name)\s*[:\-]?\s*(.+)", re.I),
     "product_identifier_alt": re.compile(r"^\s*IDENTIFICATION\s*OF\s*THE\s*SUBSTANCE.*?\n(.*?)\n", re.I | re.S),
     "vendor_block_13": re.compile(r"1\.3\s*(?:Details|Supplier|Manufacturer|Company).*?(?:\n\n|\Z)", re.I | re.S),
+    "product_use": re.compile(r"(?:Recommended\s+use|Uses?\s+of\s+the\s+substance(?:/mixture)?|Product\s+use)\s*[:\-]?\s*(.+)", re.I),
     # Dangerous goods / transport
     "dg_none": re.compile(r"(?:not\s+(?:subject|regulated)|not\s+classified\s+as\s+dangerous\s+goods)", re.I),
     "dg_class": re.compile(r"(?:Class|Hazard\s*Class(?:es)?)\s*[:\-]?\s*([0-9]{1,2}(?:\.[0-9])?)", re.I),
@@ -61,6 +62,46 @@ PATTERNS: Dict[str, re.Pattern] = {
     # Hazardous / hazard statements (Section 2)
     "haz_none": re.compile(r"(?:not\s+classified\s+as\s+hazardous|non[-\s]?hazardous|does\s+not\s+meet\s+the\s+criteria)", re.I),
     "hazard_statement_line": re.compile(r"\b(H\d{3}[A-Z]?)\b[:\-]?\s*(.+)$", re.I),
+}
+
+# SDS section titles and helpers for flexible section numbering
+SDS_SECTION_TITLES: Dict[str, str] = {
+    "1": "Identification",
+    "2": "Hazard Identification",
+    "3": "Composition/Information on Ingredients",
+    "4": "First-Aid Measures",
+    "5": "Fire-Fighting Measures",
+    "6": "Accidental Release Measures",
+    "7": "Handling and Storage",
+    "8": "Exposure Controls/Personal Protection",
+    "9": "Physical and Chemical Properties",
+    "10": "Stability and Reactivity",
+    "11": "Toxicological Information",
+    "12": "Ecological Information",
+    "13": "Disposal Considerations",
+    "14": "Transport Information",
+    "15": "Regulatory Information",
+    "16": "Other Information",
+}
+
+# Allow section numbers written as words ("Section One", "Five.", etc.)
+SECTION_WORDS: Dict[str, str] = {
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+    "thirteen": "13",
+    "fourteen": "14",
+    "fifteen": "15",
+    "sixteen": "16",
 }
 
 
@@ -177,6 +218,7 @@ class ParsedSds:
     product_id: int
     vendor: Optional[str]
     product_name: Optional[str]
+    product_use: Optional[str]
     issue_date: Optional[str]
     hazardous_substance: Optional[bool]
     hazardous_confidence: float
@@ -344,25 +386,26 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
 # Section splitting & field extraction
 # -------------------------------
 
-def _split_sections(text: str) -> Tuple[str, str, str, str]:
-    """Return sections 1, 2, 14, 16 (empty string if not found)."""
+def _split_sections(text: str) -> Dict[str, str]:
+    """Split the full text into a mapping of section number -> body.
+
+    Handles headings like "Section 1", "1.", "One -" etc. Returns the longest
+    body found for each section number.
+    """
     sections: Dict[str, str] = {}
-    # Matches: beginning-of-line optional "Section/SECTION" then number, optional punctuation, then grabs until next section header or EOF.
+    word_pat = "|".join(SECTION_WORDS.keys())
     sec = re.compile(
-        r"(?:^|\n)\s*(?:SECTION|Section)?\s*([0-9]{1,2})[\.:\)]?\s*(.*?)\s*(?=(?:\n\s*(?:SECTION|Section)?\s*[0-9]{1,2}[\.:\)]?)|\Z)",
-        re.S,
+        rf"(?:^|\n)\s*(?:SECTION|Section)?\s*(?:(?P<num>\d{{1,2}})|(?P<word>{word_pat}))[\.:\)]?\s*(?P<body>.*?)\s*(?=(?:\n\s*(?:SECTION|Section)?\s*(?:\d{{1,2}}|{word_pat})[\.:\)]?)|\Z)",
+        re.I | re.S,
     )
     for m in sec.finditer(text):
-        no = m.group(1).strip()
-        body = m.group(2).strip()
-        if no not in sections or len(body) > len(sections.get(no, "")):
-            sections[no] = body
-    return (
-        sections.get("1", ""),
-        sections.get("2", ""),
-        sections.get("14", ""),
-        sections.get("16", ""),
-    )
+        num = m.group("num")
+        if not num:
+            num = SECTION_WORDS.get(m.group("word").lower())
+        body = m.group("body").strip()
+        if num and (num not in sections or len(body) > len(sections[num])):
+            sections[num] = body
+    return sections
 
 
 def _trim_excerpt(s: str, max_len: int = 900) -> str:
@@ -416,6 +459,14 @@ def _extract_product_name(sect1: str, text: str) -> Optional[str]:
     m2 = PATTERNS["product_identifier"].search(text)
     if m2:
         return m2.group(1).strip()
+    return None
+
+
+def _extract_product_use(sect1: str) -> Optional[str]:
+    """Grab recommended use / product use from Section 1."""
+    m = PATTERNS["product_use"].search(sect1)
+    if m:
+        return m.group(1).strip()
     return None
 
 
@@ -623,10 +674,15 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
     # Normalise whitespace a bit
     text = text.replace("\x00", " ")
 
-    sect1, sect2, sect14, sect16 = _split_sections(text)
+    sections = _split_sections(text)
+    sect1 = sections.get("1", "")
+    sect2 = sections.get("2", "")
+    sect14 = sections.get("14", "")
+    sect16 = sections.get("16", "")
 
     vendor = _extract_vendor_improved(sect1, sect16, text)
     product_name = _extract_product_name(sect1, text)
+    product_use = _extract_product_use(sect1)
 
     issue_date = _resolve_issue_date(sect16, text)
 
@@ -643,6 +699,7 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
         product_id=product_id,
         vendor=vendor,
         product_name=product_name,
+        product_use=product_use,
         issue_date=issue_date,
         hazardous_substance=hazardous_substance,
         hazardous_confidence=haz_conf,
