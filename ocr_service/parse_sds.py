@@ -111,50 +111,70 @@ SECTION_WORDS: Dict[str, str] = {
 # Section 16, and avoids matching "Issued by" lines. It expects an existing
 # PATTERNS dict and a _normalise_date(str)->str function that returns ISO dates.
 
+_gap = r"(?:[^\d\n]{0,120}?)"  # up to ~120 non-digit chars between label and the date
+
 PATTERNS.update({
     "date_of_issue": re.compile(
-        r"Date\s*of\s*(?:last\s*)?issue\s*[:\-]?\s"
+        rf"Date\s*of\s*(?:last\s*)?issue{_gap}"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
     "revision_date": re.compile(
-        r"Revision(?:\s*Date)?\s*[:\-]?\s"
+        rf"(?:Date\s*of\s*revision|Revision(?:\s*Date)?)({_gap})?"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
     "issue_date_label": re.compile(
-        r"Issue\s*Date\s*[:\-]?\s"
+        rf"Issue\s*Date{_gap}"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
-    # Avoid vendor lines like "Issued by ..." using a negative look-ahead
     "issued_on": re.compile(
-        r"Issued(?!\s*by\b)\s*[:\-]?\s"
+        rf"Issued(?!\s*by\b){_gap}"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
     "date_prepared": re.compile(
-        r"Date\s*Prepared\s*[:\-]?\s"
+        rf"Date\s*Prepared{_gap}"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
     "generic_date": re.compile(
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
-    ),
+    )
 })
 
-
-def _find_first(p: re.Pattern, *texts: str) -> Optional[str]:
-    """Return first match group's text across given texts, or None."""
-    for t in texts:
-        if not t:
-            continue
-        m = p.search(t)
+def _find_first(pat: re.Pattern, sect16: str, full_text: Optional[str] = None) -> Optional[str]:
+    m = pat.search(sect16)
+    if m:
+        # choose the last capturing group if the pattern has optional groups
+        return next((g for g in m.groups()[::-1] if g), None)
+    if full_text:
+        m = pat.search(full_text)
         if m:
-            return m.group(1).strip()
+            return next((g for g in m.groups()[::-1] if g), None)
     return None
 
+def _nearest_label_date_anywhere(full_text: str) -> Optional[str]:
+    """
+    If labeled patterns fail, look for any label token followed by a generic date
+    within a short window (catches footer formats or split lines).
+    """
+    label_tokens = [
+        r"Date\s*of\s*issue",
+        r"Date\s*of\s*revision",
+        r"Issue\s*Date",
+        r"Issued(?!\s*by\b)",
+        r"Date\s*Prepared",
+    ]
+    generic = r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})"
+    for tok in label_tokens:
+        m = re.search(rf"{tok}[^\d]{{0,160}}{generic}", full_text, re.I)
+        if m:
+            # last group is the date
+            return m.groups()[-1]
+    return None
 
 def _resolve_issue_date(sect16: str, full_text: str) -> Optional[str]:
     """Prefer Section 16, then whole text; enforce sensible label priority.
@@ -162,31 +182,41 @@ def _resolve_issue_date(sect16: str, full_text: str) -> Optional[str]:
     Priority: Date of issue -> Revision Date -> Issue Date -> Issued -> Date Prepared
     Includes an optional future-date sanity check (<= 60 days ahead).
     """
-    # Search Section 16 first for each label; then fall back to the full text
     candidates = [
-        ("date_of_issue",   _find_first(PATTERNS["date_of_issue"],   sect16, full_text)),
-        ("revision_date",   _find_first(PATTERNS["revision_date"],   sect16, full_text)),
-        ("issue_date_label",_find_first(PATTERNS["issue_date_label"],sect16, full_text)),
-        ("issued_on",       _find_first(PATTERNS["issued_on"],       sect16, full_text)),
-        ("date_prepared",   _find_first(PATTERNS["date_prepared"],   sect16, full_text)),
+        ("date_of_issue",    _find_first(PATTERNS["date_of_issue"],    sect16, full_text)),
+        ("revision_date",    _find_first(PATTERNS["revision_date"],    sect16, full_text)),
+        ("issue_date_label", _find_first(PATTERNS["issue_date_label"], sect16, full_text)),
+        ("issued_on",        _find_first(PATTERNS["issued_on"],        sect16, full_text)),
+        ("date_prepared",    _find_first(PATTERNS["date_prepared"],    sect16, full_text)),
     ]
 
-    for label, raw in candidates:
+    for _, raw in candidates:
         if not raw:
             continue
         try:
             iso = _normalise_date(raw)
         except Exception:
-            # If normalisation fails, skip this candidate
             continue
-
-        # Optional sanity: reject dates far in the future (> 60 days from today)
         try:
             dt = datetime.fromisoformat(iso).date()
             if dt <= date.today() + timedelta(days=60):
                 return iso
         except Exception:
-            # If parsing the ISO string fails unexpectedly, still return it
+            # ISO parsing failed unexpectedly—return as-is rather than lose the value
+            return iso
+
+    # NEW: nearby generic date after any label token anywhere in the doc
+    raw = _nearest_label_date_anywhere(full_text)
+    if raw:
+        try:
+            iso = _normalise_date(raw)
+        except Exception:
+            iso = raw
+        try:
+            dt = datetime.fromisoformat(iso).date()
+            if dt <= date.today() + timedelta(days=60):
+                return iso
+        except Exception:
             return iso
 
     # Fallback: any unlabelled date present in Section 16
@@ -204,7 +234,6 @@ def _resolve_issue_date(sect16: str, full_text: str) -> Optional[str]:
             return iso
 
     return None
-
 # --- ISSUE DATE RESOLVER PATCH END -------------------------------------------
 # =============================================================================
 # FIX 2: Enhanced Transport Information Extraction
