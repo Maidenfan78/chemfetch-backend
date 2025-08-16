@@ -52,20 +52,6 @@ PATTERNS: Dict[str, re.Pattern] = {
     "product_identifier": re.compile(r"(?:(?:Product\s*(?:name|identifier))|Trade\s*name)\s*[:\-]?\s*(.+)", re.I),
     "product_identifier_alt": re.compile(r"^\s*IDENTIFICATION\s*OF\s*THE\s*SUBSTANCE.*?\n(.*?)\n", re.I | re.S),
     "vendor_block_13": re.compile(r"1\.3\s*(?:Details|Supplier|Manufacturer|Company).*?(?:\n\n|\Z)", re.I | re.S),
-    "issue_date": re.compile(
-    r"(?:"
-    r"Date\s*of\s*(?:last\s*)?issue|"  # "Date of issue" or "Date of last issue"
-    r"Issued|"                      # "Issued"
-    r"Issue\s*Date|"                 # "Issue Date"
-    r"Date\s*Prepared"               # "Date Prepared"
-    r")\s*[:\-]?\s"
-    r"("
-    r"\d{4}-\d{2}-\d{2}|"            # YYYY-MM-DD
-    r"\d{1,2}/\d{1,2}/\d{2,4}|"      # D/M/YYYY or DD/MM/YY
-    r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"  # e.g. "12 March 2024"
-    r")",
-    re.I,
-),
     # Dangerous goods / transport
     "dg_none": re.compile(r"(?:not\s+(?:subject|regulated)|not\s+classified\s+as\s+dangerous\s+goods)", re.I),
     "dg_class": re.compile(r"(?:Class|Hazard\s*Class(?:es)?)\s*[:\-]?\s*([0-9]{1,2}(?:\.[0-9])?)", re.I),
@@ -78,6 +64,89 @@ PATTERNS: Dict[str, re.Pattern] = {
 }
 
 
+# --- ISSUE DATE RESOLVER PATCH START -----------------------------------------
+# Drop this block into your existing parse_sds.py (e.g., near your regex
+# definitions). It adds safer, labeled patterns for SDS issue dates, prioritizes
+# Section 16, and avoids matching "Issued by" lines. It expects an existing
+# PATTERNS dict and a _normalise_date(str)->str function that returns ISO dates.
+
+PATTERNS.update({
+    "date_of_issue": re.compile(
+        r"Date\s*of\s*(?:last\s*)?issue\s*[:\-]?\s"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
+    "revision_date": re.compile(
+        r"Revision(?:\s*Date)?\s*[:\-]?\s"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
+    "issue_date_label": re.compile(
+        r"Issue\s*Date\s*[:\-]?\s"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
+    # Avoid vendor lines like "Issued by ..." using a negative look-ahead
+    "issued_on": re.compile(
+        r"Issued(?!\s*by\b)\s*[:\-]?\s"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
+    "date_prepared": re.compile(
+        r"Date\s*Prepared\s*[:\-]?\s"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
+})
+
+
+def _find_first(p: re.Pattern, *texts: str) -> Optional[str]:
+    """Return first match group's text across given texts, or None."""
+    for t in texts:
+        if not t:
+            continue
+        m = p.search(t)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def _resolve_issue_date(sect16: str, full_text: str) -> Optional[str]:
+    """Prefer Section 16, then whole text; enforce sensible label priority.
+
+    Priority: Date of issue -> Revision Date -> Issue Date -> Issued -> Date Prepared
+    Includes an optional future-date sanity check (<= 60 days ahead).
+    """
+    # Search Section 16 first for each label; then fall back to the full text
+    candidates = [
+        ("date_of_issue",   _find_first(PATTERNS["date_of_issue"],   sect16, full_text)),
+        ("revision_date",   _find_first(PATTERNS["revision_date"],   sect16, full_text)),
+        ("issue_date_label",_find_first(PATTERNS["issue_date_label"],sect16, full_text)),
+        ("issued_on",       _find_first(PATTERNS["issued_on"],       sect16, full_text)),
+        ("date_prepared",   _find_first(PATTERNS["date_prepared"],   sect16, full_text)),
+    ]
+
+    for label, raw in candidates:
+        if not raw:
+            continue
+        try:
+            iso = _normalise_date(raw)
+        except Exception:
+            # If normalisation fails, skip this candidate
+            continue
+
+        # Optional sanity: reject dates far in the future (> 60 days from today)
+        try:
+            dt = datetime.fromisoformat(iso).date()
+            if dt <= date.today() + timedelta(days=60):
+                return iso
+        except Exception:
+            # If parsing the ISO string fails unexpectedly, still return it
+            return iso
+
+    return None
+
+# --- ISSUE DATE RESOLVER PATCH END -------------------------------------------
 # =============================================================================
 # FIX 2: Enhanced Transport Information Extraction
 # Add these new patterns to your PATTERNS dictionary
@@ -559,8 +628,7 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
     vendor = _extract_vendor_improved(sect1, sect16, text)
     product_name = _extract_product_name(sect1, text)
 
-    raw_date = _find(PATTERNS["issue_date"], text) or _find(PATTERNS["issue_date"], sect16)
-    issue_date = _normalise_date(raw_date)
+    issue_date = _resolve_issue_date(sect16, text)
 
     hazard_statements = _extract_hazard_statements(sect2)
     hazardous_substance, haz_conf = _is_hazardous(sect2, hazard_statements)
