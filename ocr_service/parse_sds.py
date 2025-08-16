@@ -140,6 +140,7 @@ def _extract_text_fitz(pdf_bytes: bytes) -> Optional[str]:
         return None
     try:
         text_parts: List[str] = []
+        
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             for page in doc:
                 text_parts.append(page.get_text("text"))
