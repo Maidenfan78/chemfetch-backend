@@ -68,6 +68,29 @@ PATTERNS: Dict[str, re.Pattern] = {
     "hazard_statement_line": re.compile(r"\b(H\d{3}[A-Z]?)\b[:\-]?\s*(.+)$", re.I),
 }
 
+
+# =============================================================================
+# FIX 2: Enhanced Transport Information Extraction
+# Add these new patterns to your PATTERNS dictionary
+# =============================================================================
+
+# Add these to your existing PATTERNS dict:
+NEW_PATTERNS = {
+    "dg_class_enhanced": re.compile(r"(?:Class|Hazard\s*Class(?:es)?|DG\s*Class)\s*[:\-]?\s*([0-9]{1,2}(?:\.[0-9])?)", re.I),
+    "proper_shipping_name": re.compile(r"(?:Proper\s*Shipping\s*Name|PSN)\s*[:\-]?\s*([^,\n]+)", re.I),
+    "packing_group_enhanced": re.compile(r"(?:Packing\s*Group|PG|P\.?G\.?)\s*[:\-]?\s*(I{1,3}|[1-3])\b", re.I),
+    "signal_word": re.compile(r"(?:Signal\s+word[s]?)\s*[:\-]?\s*(Danger|Warning)", re.I),
+    "precautionary_statements": re.compile(r"\b(P\d{3}[A-Z]?)\b[:\-]?\s*([^.]+\.?)", re.I),
+    "cas_number": re.compile(r"\b(\d{2,7}-\d{2}-\d)\b"),
+    "emergency_phone": re.compile(r"(?:Emergency|24\s*hour|Emergency\s*contact).*?(?:phone|tel|call)\s*[:\-]?\s*([\+\d\s\(\)\-]{10,})", re.I),
+}
+
+# Merge new regexes into main PATTERNS
+try:
+    PATTERNS.update(NEW_PATTERNS)
+except Exception:
+    pass
+
 # -------------------------------
 # Data model
 # -------------------------------
@@ -86,6 +109,11 @@ class ParsedSds:
     packing_group: Optional[str]
     subsidiary_risks: Optional[str]
     un_number: Optional[str]
+    # New: GHS labeling & identifiers
+    signal_word: Optional[str]
+    precautionary_statements: List[str]
+    cas_numbers: List[str]
+    proper_shipping_name: Optional[str]
     # Optional: raw section snippets for QA/audits (trimmed)
     section_1_excerpt: Optional[str]
     section_2_excerpt: Optional[str]
@@ -94,7 +122,6 @@ class ParsedSds:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
-
 # -------------------------------
 # Utilities
 # -------------------------------
@@ -368,6 +395,142 @@ def _is_hazardous(sect2: str, hazard_statements: List[str]) -> Tuple[bool, float
         return True, 0.5
     return False, 0.2
 
+# =============================================================================
+# FIX 1: Enhanced Vendor Extraction
+# Replace your existing _extract_vendor function with this improved version
+# =============================================================================
+
+def _extract_vendor_improved(sect1: str, sect16: str, full_text: str) -> Optional[str]:
+    """Enhanced vendor extraction that checks Section 16 first."""
+    # Priority 1: Check Section 16 for "Prepared by" statements
+    if sect16:
+        prep_patterns = [
+            re.compile(r"(?:SDS\s+)?(?:Prepared|Issued)\s+by\s*[:\-]?\s*([^,\n]+)", re.I),
+            re.compile(r"Prepared\s*[:\-]?\s*([^,\n]+)", re.I),
+        ]
+        for pattern in prep_patterns:
+            m = pattern.search(sect16)
+            if m:
+                vendor = m.group(1).strip()
+                # Filter out non-vendor text
+                if vendor and not re.search(r"(Address|Street|Road|Tel|Phone|Email|Website|Emergency|Date)", vendor, re.I):
+                    if len(vendor.split()) >= 2:  # Company names typically have 2+ words
+                        return vendor
+
+    # Priority 2: Standard vendor patterns in Section 1
+    vendor_patterns = [
+        re.compile(r"(?:Supplier|Company|Manufacturer|Distributor)\s*[:\-]?\s*([^,\n]+)", re.I),
+    ]
+    for text_section in [sect1, full_text]:
+        for pattern in vendor_patterns:
+            m = pattern.search(text_section or "")
+            if m:
+                vendor = m.group(1).strip()
+                if vendor and not re.search(r"(Address|Street|Road|Tel|Phone|Email|Website|Emergency)", vendor, re.I):
+                    if len(vendor.split()) >= 2:
+                        return vendor
+
+    # Priority 3: Try explicit 1.3 block (existing logic)
+    m = re.search(r"1\.3\s*(?:Details|Supplier|Manufacturer|Company).*?(?:\n\n|\Z)", sect1 or "", re.I | re.S)
+    if m:
+        block = m.group(0)
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        for i, ln in enumerate(lines):
+            if re.search(r"^(?:Supplier|Company|Manufacturer|Distributor)\b", ln, re.I):
+                m2 = re.match(r"^(?:Supplier|Company|Manufacturer|Distributor)\s*[:\-]?\s*(.+)$", ln, re.I)
+                if m2:
+                    cand = m2.group(1).strip()
+                    if cand and not re.search(r"(Address|Street|Road|Tel|Phone|Email|Website|Emergency)", cand, re.I):
+                        return cand
+                # Check next line
+                if i + 1 < len(lines):
+                    cand = lines[i + 1]
+                    if cand and len(cand.split()) >= 2:
+                        return cand
+    return None
+
+# =============================================================================
+# FIX 3: Add Signal Word and P-Code Extraction 
+# Add these new functions to extract GHS labeling information
+# =============================================================================
+
+def _extract_signal_word(sect2: str) -> Optional[str]:
+    """Extract GHS signal word (Danger or Warning)."""
+    m = NEW_PATTERNS["signal_word"].search(sect2 or "")
+    return m.group(1) if m else None
+
+def _extract_precautionary_statements(sect2: str) -> List[str]:
+    """Extract P-codes and their descriptions."""
+    statements: List[str] = []
+    for m in NEW_PATTERNS["precautionary_statements"].finditer(sect2 or ""):
+        code = m.group(1).upper()
+        desc = m.group(2).strip().rstrip('.')
+        statements.append(f"{code} {desc}")
+    return statements
+
+def _extract_cas_numbers(text: str) -> List[str]:
+    """Extract all CAS numbers from the full text."""
+    cas_numbers: List[str] = []
+    for m in NEW_PATTERNS["cas_number"].finditer(text or ""):
+        cas = m.group(1)
+        if cas not in cas_numbers:
+            cas_numbers.append(cas)
+    return cas_numbers
+
+def _extract_proper_shipping_name(sect14: str) -> Optional[str]:
+    """Extract proper shipping name from transport section."""
+    m = NEW_PATTERNS["proper_shipping_name"].search(sect14 or "")
+    if m:
+        return m.group(1).strip()
+    # Fallback: look for shipping name patterns without explicit label
+    lines = (sect14 or "").splitlines()
+    for line in lines:
+        if "ALCOHOL" in line.upper() and ("N.O.S" in line.upper() or "NOS" in line.upper()):
+            # Extract the shipping name part
+            clean_line = re.sub(r"UN\d{4}\s*", "", line).strip()
+            if len(clean_line) > 5:
+                return clean_line
+    return None
+
+def _dangerous_goods_tuple_improved(sect14: str) -> Tuple[bool, Optional[str], Optional[str], Optional[str], float, Optional[str]]:
+    """Enhanced transport information extraction."""
+    if not (sect14 or "").strip():
+        return False, None, None, None, 0.0, None
+    s14 = sect14
+    # Check for "not regulated" first
+    if re.search(r"(?:not\s+(?:subject|regulated)|not\s+classified\s+as\s+dangerous\s+goods)", s14, re.I):
+        return False, None, None, None, 1.0, None
+    # Extract transport details using enhanced patterns
+    un = None
+    m = re.search(r"\b(?:UN|UN/ID)\s*(?:No\.?|Number)?\s*[:\-]?\s*(\d{3,4})\b", s14, re.I)
+    if m:
+        un = m.group(1)
+    dg_class = None
+    m = NEW_PATTERNS["dg_class_enhanced"].search(s14)
+    if m:
+        dg_class = m.group(1)
+    pg = None
+    m = NEW_PATTERNS["packing_group_enhanced"].search(s14)
+    if m:
+        pg = m.group(1)
+    subs = None
+    m = re.search(r"(?:Subsidiary\s*Risk(?:s)?|Sub\s*Risk)\s*[:\-]?\s*([A-Za-z0-9 ,/.-]+)", s14, re.I)
+    if m:
+        subs = m.group(1)
+    # Determine if dangerous good
+    is_dg = bool(un or dg_class or pg)
+    # Calculate confidence - improved scoring
+    conf = 0.0
+    if is_dg:
+        signals = sum(1 for x in [un, dg_class, pg] if x)
+        if un and dg_class:
+            conf = 1.0  # Both UN and class = very confident
+        elif signals >= 2:
+            conf = 0.8  # Any two signals = confident
+        else:
+            conf = 0.6  # One signal = moderately confident
+    return is_dg, dg_class, pg, un, conf, subs
+
 # -------------------------------
 # Core parse
 # -------------------------------
@@ -384,7 +547,7 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
 
     sect1, sect2, sect14, sect16 = _split_sections(text)
 
-    vendor = _extract_vendor(sect1)
+    vendor = _extract_vendor_improved(sect1, sect16, text)
     product_name = _extract_product_name(sect1, text)
 
     raw_date = _find(PATTERNS["issue_date"], text) or _find(PATTERNS["issue_date"], sect16)
@@ -392,8 +555,12 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
 
     hazard_statements = _extract_hazard_statements(sect2)
     hazardous_substance, haz_conf = _is_hazardous(sect2, hazard_statements)
+    signal_word = _extract_signal_word(sect2)
+    precautionary_statements = _extract_precautionary_statements(sect2)
+    cas_numbers = _extract_cas_numbers(text)
+    proper_shipping_name = _extract_proper_shipping_name(sect14)
 
-    dg_flag, dg_class, packing_group, un_number, dg_conf, subsidiary_risks = _dangerous_goods_tuple(sect14)
+    dg_flag, dg_class, packing_group, un_number, dg_conf, subsidiary_risks = _dangerous_goods_tuple_improved(sect14)
 
     return ParsedSds(
         product_id=product_id,
@@ -409,6 +576,10 @@ def _parse_core(pdf_bytes: bytes, *, product_id: int) -> ParsedSds:
         packing_group=packing_group,
         subsidiary_risks=subsidiary_risks,
         un_number=un_number,
+        signal_word=signal_word,
+        precautionary_statements=precautionary_statements,
+        cas_numbers=cas_numbers,
+        proper_shipping_name=proper_shipping_name,
         section_1_excerpt=_trim_excerpt(sect1) if sect1 else None,
         section_2_excerpt=_trim_excerpt(sect2) if sect2 else None,
         section_14_excerpt=_trim_excerpt(sect14) if sect14 else None,
