@@ -4,6 +4,7 @@ import { supabase } from '../utils/supabaseClient';
 import { isValidCode, isValidName } from '../utils/validation';
 import logger from '../utils/logger';
 import { fetchSdsByName } from '../utils/scraper';
+import { triggerAutoSdsParsing } from '../utils/autoSdsParsing';
 
 const router = express.Router();
 
@@ -18,13 +19,18 @@ router.post('/', async (req, res) => {
   // current record, return 409 so the client can ignore the duplicate.
   const { data: existing, error: fetchErr } = await supabase
     .from('product')
-    .select('barcode, name, contents_size_weight')
+    .select('barcode, name, contents_size_weight, sds_url, id')
     .eq('barcode', code)
     .maybeSingle();
 
   if (fetchErr) return res.status(500).json({ error: fetchErr.message });
 
   if (existing && existing.name === name && existing.contents_size_weight === size) {
+    // Even if it's a duplicate, check if we should trigger parsing
+    if (existing.sds_url && existing.id) {
+      logger.info({ productId: existing.id }, '[CONFIRM] Triggering auto-SDS parsing for duplicate product');
+      triggerAutoSdsParsing(existing.id, { delay: 1000 });
+    }
     return res.status(409).json({ error: 'Product already registered', product: existing });
   }
 
@@ -37,6 +43,7 @@ router.post('/', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   let product = data;
+  let sdsUrlAdded = false;
 
   if (product && !product.sds_url && product.name) {
     try {
@@ -50,11 +57,20 @@ router.post('/', async (req, res) => {
           .maybeSingle();
         if (!update.error) {
           product = update.data || { ...product, sds_url: sdsUrl };
+          sdsUrlAdded = true;
+          logger.info({ productId: product.id, sdsUrl }, '[CONFIRM] Added SDS URL to confirmed product');
         }
       }
     } catch (err: any) {
       logger.warn({ err: String(err) }, '[CONFIRM] SDS lookup failed');
     }
+  }
+
+  // Trigger auto-SDS parsing if we have an SDS URL
+  if (product?.sds_url && product?.id) {
+    const delay = sdsUrlAdded ? 2000 : 1000; // Longer delay if we just found the SDS
+    logger.info({ productId: product.id }, '[CONFIRM] Triggering auto-SDS parsing for confirmed product');
+    triggerAutoSdsParsing(product.id, { delay });
   }
 
   res.json({ success: true, product });

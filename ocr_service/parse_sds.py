@@ -31,7 +31,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
 
 # -------------------------------
@@ -53,10 +53,19 @@ PATTERNS: Dict[str, re.Pattern] = {
     "product_identifier_alt": re.compile(r"^\s*IDENTIFICATION\s*OF\s*THE\s*SUBSTANCE.*?\n(.*?)\n", re.I | re.S),
     "vendor_block_13": re.compile(r"1\.3\s*(?:Details|Supplier|Manufacturer|Company).*?(?:\n\n|\Z)", re.I | re.S),
     "issue_date": re.compile(
-        r"(?:Revision(?:\s*Date)?|Date\s*of\s*(?:last\s*)?issue|Issued|Issue\s*Date)\s*[:\-]?\s"
-        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
-        re.I,
-    ),
+    r"(?:"
+    r"Date\s*of\s*(?:last\s*)?issue|"  # "Date of issue" or "Date of last issue"
+    r"Issued|"                      # "Issued"
+    r"Issue\s*Date|"                 # "Issue Date"
+    r"Date\s*Prepared"               # "Date Prepared"
+    r")\s*[:\-]?\s"
+    r"("
+    r"\d{4}-\d{2}-\d{2}|"            # YYYY-MM-DD
+    r"\d{1,2}/\d{1,2}/\d{2,4}|"      # D/M/YYYY or DD/MM/YY
+    r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"  # e.g. "12 March 2024"
+    r")",
+    re.I,
+),
     # Dangerous goods / transport
     "dg_none": re.compile(r"(?:not\s+(?:subject|regulated)|not\s+classified\s+as\s+dangerous\s+goods)", re.I),
     "dg_class": re.compile(r"(?:Class|Hazard\s*Class(?:es)?)\s*[:\-]?\s*([0-9]{1,2}(?:\.[0-9])?)", re.I),
@@ -619,18 +628,26 @@ def _cli() -> None:
     ap.add_argument("--out", type=str, help="Write JSON to this path (else print)")
     args = ap.parse_args()
 
-    if args.path:
-        parsed = parse_sds_path(args.path, product_id=args.product_id)
-    else:
-        parsed = parse_sds_pdf(args.url, product_id=args.product_id)
+    try:
+        if args.path:
+            parsed = parse_sds_path(args.path, product_id=args.product_id)
+        else:
+            parsed = parse_sds_pdf(args.url, product_id=args.product_id)
 
-    payload = parsed.to_json()
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            f.write(payload)
-        logger.info("Wrote %s", args.out)
-    else:
-        print(payload)
+        payload = parsed.to_json()
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(payload)
+            logger.info("Wrote %s", args.out)
+        else:
+            print(payload)
+    except Exception as e:
+        error_response = {
+            "error": str(e),
+            "product_id": args.product_id
+        }
+        print(json.dumps(error_response))
+        exit(1)
 
 
 if __name__ == "__main__":

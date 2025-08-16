@@ -5,6 +5,7 @@ import { isValidCode, isValidName } from '../utils/validation';
 import logger from '../utils/logger';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { triggerAutoSdsParsing } from '../utils/autoSdsParsing';
 
 const router = express.Router();
 puppeteer.use(StealthPlugin());
@@ -108,6 +109,11 @@ router.post('/', async (req, res) => {
               .maybeSingle();
             logger.info({ updateResult }, '[SCAN] Updated product with SDS');
             updated.sds_url = foundSds;
+          // Trigger auto-SDS parsing for newly added SDS URL
+          if (updated.id) {
+            logger.info({ productId: updated.id }, '[SCAN] Triggering auto-SDS parsing for updated product');
+            triggerAutoSdsParsing(updated.id, { delay: 1000 });
+          }
           }
         } catch (err: any) {
           logger.warn({ err: String(err) }, '[SCAN] SDS enrichment failed');
@@ -178,6 +184,12 @@ router.post('/', async (req, res) => {
 
     logger.info({ code, data, error }, '[SCAN] Final database write result');
     if (error) return res.status(500).json({ error: error.message });
+
+    // Trigger auto-SDS parsing if we found an SDS URL
+    if (data?.sds_url && data?.id) {
+      logger.info({ productId: data.id }, '[SCAN] Triggering auto-SDS parsing for new product');
+      triggerAutoSdsParsing(data.id, { delay: 2000 }); // 2 second delay for new products
+    }
 
     return res.json({ code, scraped, product: data });
   } catch (err: any) {

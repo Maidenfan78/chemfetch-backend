@@ -89,8 +89,12 @@ router.post('/', async (req, res) => {
 
     // 4. Execute Python parsing script
     const scriptPath = path.join(__dirname, '../../ocr_service/parse_sds.py');
-    logger.info(`Starting Python script: python ${scriptPath} ${product_id} ${targetSdsUrl}`);
-    const pythonProcess = spawn('python', [scriptPath, product_id.toString(), targetSdsUrl]);
+    logger.info(`Starting Python script: python ${scriptPath} --product-id ${product_id} --url ${targetSdsUrl}`);
+    const pythonProcess = spawn('python', [
+      scriptPath,
+      '--product-id', product_id.toString(),
+      '--url', targetSdsUrl
+    ]);
 
     let stdout = '';
     let stderr = '';
@@ -174,6 +178,7 @@ router.post('/', async (req, res) => {
             hazardous_substance: parsedMetadata.hazardous_substance,
             dangerous_good: parsedMetadata.dangerous_good,
             dangerous_goods_class: parsedMetadata.dangerous_goods_class,
+            description: parsedMetadata.product_name,
             packing_group: parsedMetadata.packing_group,
             subsidiary_risks: parsedMetadata.subsidiary_risks,
             raw_json: parsedMetadata,
@@ -351,7 +356,11 @@ router.post('/batch', async (req, res) => {
         // Simulate the parsing request internally
         const parseRequest = new Promise<any>((resolve) => {
           const scriptPath = path.join(__dirname, '../../ocr_service/parse_sds.py');
-          const pythonProcess = spawn('python', [scriptPath, product.id.toString(), product.sds_url]);
+          const pythonProcess = spawn('python', [
+            scriptPath,
+            '--product-id', product.id.toString(),
+            '--url', product.sds_url
+          ]);
 
           let stdout = '';
           let stderr = '';
@@ -388,6 +397,7 @@ router.post('/batch', async (req, res) => {
                   hazardous_substance: parsedMetadata.hazardous_substance,
                   dangerous_good: parsedMetadata.dangerous_good,
                   dangerous_goods_class: parsedMetadata.dangerous_goods_class,
+                  description: parsedMetadata.product_name,
                   packing_group: parsedMetadata.packing_group,
                   subsidiary_risks: parsedMetadata.subsidiary_risks,
                   raw_json: parsedMetadata,

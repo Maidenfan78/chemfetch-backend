@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "jest"
+    "test": "jest",
+    "process-existing-sds": "npx tsx scripts/processExistingSds.ts",
+    "reprocess-all-sds": "npx tsx scripts/processExistingSds.ts --force",
+    "force-reprocess-sds": "npx tsx scripts/forceReprocessSds.ts"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +32,7 @@
     "sharp": "^0.34.3"
   },
   "devDependencies": {
+    "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
     "@types/puppeteer": "^5.4.7",
     "@types/supertest": "^6.0.3",

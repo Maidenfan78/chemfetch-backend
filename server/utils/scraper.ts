@@ -263,18 +263,12 @@ export async function fetchSdsByName(
       const { isPdf, finalUrl } = await isPdfByHeaders(url);
       if (isPdf) {
         console.log("[SCRAPER] Found direct PDF, verifying:", finalUrl);
-        // TEMPORARY: Skip OCR verification for testing
-        console.log("[SCRAPER] TESTING MODE: Accepting PDF without OCR verification");
-        SDS_CACHE.set(cacheKey, finalUrl);
-        return { sdsUrl: finalUrl, topLinks };
-        
-        // Uncomment below to re-enable OCR verification:
-        // const ok = await verifySdsUrl(finalUrl, name);
-        // if (ok) {
-        //   console.log("[SCRAPER] Valid SDS PDF found", finalUrl);
-        //   SDS_CACHE.set(cacheKey, finalUrl);
-        //   return { sdsUrl: finalUrl, topLinks };
-        // }
+        const ok = await verifySdsUrl(finalUrl, name);
+        if (ok) {
+          console.log("[SCRAPER] Valid SDS PDF found", finalUrl);
+          SDS_CACHE.set(cacheKey, finalUrl);
+          return { sdsUrl: finalUrl, topLinks };
+        }
       }
     }
 

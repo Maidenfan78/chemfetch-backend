@@ -1,6 +1,6 @@
 // server/routes/ocrProxy.ts
 import { Router } from 'express';
-import { createProxyMiddleware } from 'http-proxy-middleware';
+import { createProxyMiddleware, Options } from 'http-proxy-middleware';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -12,42 +12,37 @@ dotenv.config();
 const OCR_SERVICE_URL = process.env.OCR_SERVICE_URL || 'http://localhost:5001';
 const router = Router();
 
-router.use(
-  '/',
-  createProxyMiddleware(
-    {
-      target: OCR_SERVICE_URL,
-      changeOrigin: true,
-      pathRewrite: () => '/ocr', // always forward as /ocr
+const proxyOptions: Options = {
+  target: OCR_SERVICE_URL,
+  changeOrigin: true,
+  pathRewrite: () => '/ocr', // always forward as /ocr
+  logLevel: 'debug', // Properly typed with Options interface
 
-      // @ts-ignore: logLevel is supported by http-proxy-middleware but missing from our d.ts
-      logLevel: 'debug',
+  onProxyReq: (proxyReq, req, res) => {
+    console.log(
+      '[OCR Proxy ▶︎ Python]',
+      new Date().toISOString(),
+      'method:', proxyReq.method,
+      'path:', proxyReq.path,
+      'content-type:', proxyReq.getHeader('content-type'),
+      'content-length:', proxyReq.getHeader('content-length')
+    );
+  },
 
-      onProxyReq: (proxyReq, req, res) => {
-        console.log(
-          '[OCR Proxy ▶︎ Python]',
-          new Date().toISOString(),
-          'method:', proxyReq.method,
-          'path:', proxyReq.path,
-          'content-type:', proxyReq.getHeader('content-type'),
-          'content-length:', proxyReq.getHeader('content-length')
-        );
-      },
+  onProxyRes: (proxyRes, req, res) => {
+    console.log(
+      '[OCR Python ◀︎ Proxy]',
+      new Date().toISOString(),
+      'status:', proxyRes.statusCode,
+      'headers:', proxyRes.headers
+    );
+  },
 
-      onProxyRes: (proxyRes, req, res) => {
-        console.log(
-          '[OCR Python ◀︎ Proxy]',
-          new Date().toISOString(),
-          'status:', proxyRes.statusCode,
-          'headers:', proxyRes.headers
-        );
-      },
+  headers: {
+    'X-Forwarded-By': 'chemfetch-backend',
+  },
+};
 
-      headers: {
-        'X-Forwarded-By': 'chemfetch-backend',
-      },
-    } as any
-  )
-);
+router.use('/', createProxyMiddleware(proxyOptions));
 
 export default router;

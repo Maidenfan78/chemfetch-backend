@@ -1,31 +1,12 @@
 // server/index.ts
 import app from "./app";
 import logger from "./utils/logger";
-import ocrProxy from "./routes/ocrProxy";
+
+// Note: OCR route registration is now handled in app.ts to avoid duplicate registration
+// The proxy configuration is properly centralized in the main app configuration.
 
 // ---------------------------------------------------------------------------
-// 🔀  /ocr proxy → Python service (127.0.0.1:5001)
-// ---------------------------------------------------------------------------
-// This keeps port 3000 as the single public endpoint so that mobile clients
-// don't need direct access to :5001. The multipart body streams straight
-// through without buffering.
-app.use(
-  "/ocr",
-  // Log incoming proxy requests
-  (req, res, next) => {
-    logger.info("[OCR Proxy Incoming]", {
-      timestamp: new Date().toISOString(),
-      method: req.method,
-      url: req.originalUrl,
-      headers: req.headers,
-    });
-    next();
-  },
-  ocrProxy
-);
-
-// ---------------------------------------------------------------------------
-// 🩺  Health check (also verifies proxy path)
+// 🩺  Health check (verifies proxy path)
 // ---------------------------------------------------------------------------
 app.get("/ocr/health", (_req, res) =>
   res.json({ status: "ok", target: "127.0.0.1:5001" })
