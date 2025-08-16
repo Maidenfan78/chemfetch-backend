@@ -138,6 +138,10 @@ PATTERNS.update({
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
         re.I,
     ),
+    "generic_date": re.compile(
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+        re.I,
+    ),
 })
 
 
@@ -183,6 +187,20 @@ def _resolve_issue_date(sect16: str, full_text: str) -> Optional[str]:
                 return iso
         except Exception:
             # If parsing the ISO string fails unexpectedly, still return it
+            return iso
+
+    # Fallback: any unlabelled date present in Section 16
+    raw = _find_first(PATTERNS["generic_date"], sect16)
+    if raw:
+        try:
+            iso = _normalise_date(raw)
+        except Exception:
+            iso = raw
+        try:
+            dt = datetime.fromisoformat(iso).date()
+            if dt <= date.today() + timedelta(days=60):
+                return iso
+        except Exception:
             return iso
 
     return None
