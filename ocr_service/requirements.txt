@@ -5,3 +5,6 @@ numpy
 paddlepaddle
 pdfminer.six
 requests
+pdfplumber
+pytesseract
+Pillow

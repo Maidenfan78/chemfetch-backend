@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import pinoHttp from 'pino-http';
 import sdsByNameRoute from './routes/sdsByName';
+import parseSdsRoute from './routes/parseSds';
 
 import logger from './utils/logger';
 
@@ -31,5 +32,6 @@ app.use('/confirm', confirmRoute);
 app.use('/health', healthRoute);
 app.use('/ocr', ocrProxy);                     // <— NEW
 app.use('/verify-sds', verifySdsProxy);        // <— NEW
+app.use('/parse-sds', parseSdsRoute);          // <— NEW
 
 export default app;

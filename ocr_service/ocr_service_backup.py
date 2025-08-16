@@ -4,11 +4,9 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple
 from pdfminer.high_level import extract_text
 import requests
-import threading
-import time
 
 import cv2
 import numpy as np
@@ -41,42 +39,6 @@ app = Flask(__name__)
 DEBUG_IMAGES_ENV = os.getenv("DEBUG_IMAGES", "0") == "1"
 DEBUG_DIR = Path("debug_images")
 DEBUG_DIR.mkdir(exist_ok=True)
-
-# -----------------------------------------------------------------------------
-# Cross-platform timeout utility
-# -----------------------------------------------------------------------------
-class TimeoutError(Exception):
-    pass
-
-def run_with_timeout(func, args=(), kwargs=None, timeout=120):
-    """
-    Run a function with a timeout. Cross-platform alternative to signal.alarm.
-    """
-    if kwargs is None:
-        kwargs = {}
-    
-    result: List[Any] = [None]
-    exception: List[Optional[Exception]] = [None]
-    
-    def target():
-        try:
-            result[0] = func(*args, **kwargs)
-        except Exception as e:
-            exception[0] = e
-    
-    thread = threading.Thread(target=target)
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout)
-    
-    if thread.is_alive():
-        # Note: We can't forcibly kill the thread in Python, but we can ignore its result
-        raise TimeoutError("Function execution timeout")
-    
-    if exception[0]:
-        raise exception[0]
-    
-    return result[0]
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -319,8 +281,21 @@ def verify_sds():
         return jsonify({'error': 'Missing url or name'}), 400
 
     try:
-        # Use cross-platform timeout protection
-        verified = run_with_timeout(verify_pdf_sds, args=(url, name), timeout=120)
+        # Add timeout protection at the endpoint level
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Verification timeout")
+        
+        # Set 2-minute timeout for verification
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(120)  # 2 minutes
+        
+        try:
+            verified = verify_pdf_sds(url, name)
+        finally:
+            signal.alarm(0)  # Clear timeout
+            
         return jsonify({'verified': verified}), 200
         
     except TimeoutError:

@@ -2,8 +2,13 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import logger from '../utils/logger';
 import { createServiceRoleClient } from '../utils/supabaseClient';
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = Router();
 
@@ -84,10 +89,22 @@ router.post('/', async (req, res) => {
 
     // 4. Execute Python parsing script
     const scriptPath = path.join(__dirname, '../../ocr_service/parse_sds.py');
+    logger.info(`Starting Python script: python ${scriptPath} ${product_id} ${targetSdsUrl}`);
     const pythonProcess = spawn('python', [scriptPath, product_id.toString(), targetSdsUrl]);
 
     let stdout = '';
     let stderr = '';
+    let responseHandled = false; // Flag to prevent multiple responses
+
+    // Helper function to safely send response
+    const sendResponse = (statusCode: number, data: any) => {
+      if (!responseHandled && !res.headersSent) {
+        responseHandled = true;
+        return res.status(statusCode).json(data);
+      } else {
+        logger.warn(`Attempted to send response after headers sent or response handled for product ${product_id}`);
+      }
+    };
 
     pythonProcess.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -98,9 +115,18 @@ router.post('/', async (req, res) => {
     });
 
     pythonProcess.on('close', async (code) => {
+      if (responseHandled) {
+        logger.info(`Python script finished but response already handled for product ${product_id}`);
+        return;
+      }
+
+      logger.info(`Python script finished with code ${code}`);
+      logger.info(`Python stdout:`, stdout);
+      logger.info(`Python stderr:`, stderr);
+      
       if (code !== 0) {
         logger.error(`Python script failed with code ${code}:`, stderr);
-        return res.status(500).json({
+        return sendResponse(500, {
           success: false,
           product_id,
           message: 'Failed to parse SDS',
@@ -115,9 +141,20 @@ router.post('/', async (req, res) => {
         
         try {
           parsedMetadata = JSON.parse(output);
+          
+          // Check if Python script returned an error
+          if (parsedMetadata.error) {
+            logger.error('Python script returned error:', parsedMetadata.error);
+            return sendResponse(500, {
+              success: false,
+              product_id,
+              message: 'Failed to parse SDS',
+              error: parsedMetadata.error,
+            });
+          }
         } catch (parseError) {
           logger.error('Failed to parse Python output as JSON:', output);
-          return res.status(500).json({
+          return sendResponse(500, {
             success: false,
             product_id,
             message: 'Failed to parse SDS metadata',
@@ -126,6 +163,8 @@ router.post('/', async (req, res) => {
         }
 
         // 6. Store metadata in database
+        logger.info(`Storing SDS metadata for product ${product_id}:`, parsedMetadata);
+        
         const { error: upsertError } = await supabase
           .from('sds_metadata')
           .upsert({
@@ -142,7 +181,7 @@ router.post('/', async (req, res) => {
 
         if (upsertError) {
           logger.error('Failed to store SDS metadata:', upsertError);
-          return res.status(500).json({
+          return sendResponse(500, {
             success: false,
             product_id,
             message: 'Failed to store SDS metadata',
@@ -170,7 +209,7 @@ router.post('/', async (req, res) => {
         }
 
         logger.info(`Successfully parsed SDS for product ${product_id}`);
-        return res.status(200).json({
+        return sendResponse(200, {
           success: true,
           product_id,
           message: 'SDS parsed and stored successfully',
@@ -179,7 +218,7 @@ router.post('/', async (req, res) => {
 
       } catch (dbError) {
         logger.error('Database error during SDS parsing:', dbError);
-        return res.status(500).json({
+        return sendResponse(500, {
           success: false,
           product_id,
           message: 'Database error during SDS processing',
@@ -188,12 +227,23 @@ router.post('/', async (req, res) => {
       }
     });
 
+    // Handle client disconnect
+    req.on('close', () => {
+      if (!responseHandled) {
+        logger.info(`Client disconnected for product ${product_id}, killing Python process`);
+        responseHandled = true;
+        if (!pythonProcess.killed) {
+          pythonProcess.kill();
+        }
+      }
+    });
+
     // Set timeout for Python script execution (5 minutes)
-    setTimeout(() => {
-      if (!pythonProcess.killed) {
+    const timeoutId = setTimeout(() => {
+      if (!responseHandled && !pythonProcess.killed) {
         pythonProcess.kill();
         logger.error(`Python script timeout for product ${product_id}`);
-        return res.status(504).json({
+        sendResponse(504, {
           success: false,
           product_id,
           message: 'SDS parsing timeout',
@@ -201,6 +251,11 @@ router.post('/', async (req, res) => {
         });
       }
     }, 5 * 60 * 1000);
+
+    // Clear timeout if process completes normally
+    pythonProcess.on('close', () => {
+      clearTimeout(timeoutId);
+    });
 
   } catch (error) {
     logger.error('Error in SDS parsing route:', error);

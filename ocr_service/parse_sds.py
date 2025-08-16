@@ -303,11 +303,17 @@ def parse_sds_pdf(url: str, *, product_id: int) -> ParsedSds:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
-    import pprint
 
     if len(sys.argv) != 3:
         print("Usage: python ocr_service/parse_sds.py <PRODUCT_ID> <PDF_URL>")
         sys.exit(1)
 
-    res = parse_sds_pdf(sys.argv[2], product_id=int(sys.argv[1]))
-    pprint.pp(res.as_upsert_dict())
+    try:
+        res = parse_sds_pdf(sys.argv[2], product_id=int(sys.argv[1]))
+        # Output JSON for the Node.js backend to parse
+        print(json.dumps(res.as_upsert_dict()))
+    except Exception as e:
+        logger.error(f"Error parsing SDS: {str(e)}")
+        # Output error in JSON format
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
