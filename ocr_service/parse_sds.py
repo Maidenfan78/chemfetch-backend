@@ -111,7 +111,7 @@ SECTION_WORDS: Dict[str, str] = {
 # Section 16, and avoids matching "Issued by" lines. It expects an existing
 # PATTERNS dict and a _normalise_date(str)->str function that returns ISO dates.
 
-_gap = r"(?:[^\d\n]{0,120}?)"  # up to ~120 non-digit chars between label and the date
+_gap = r"(?:[\s\S]{0,120}?)"  # allow up to ~120 chars (including digits/newlines) between label and date
 
 PATTERNS.update({
     "date_of_issue": re.compile(
@@ -170,7 +170,7 @@ def _nearest_label_date_anywhere(full_text: str) -> Optional[str]:
     ]
     generic = r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})"
     for tok in label_tokens:
-        m = re.search(rf"{tok}[^\d]{{0,160}}{generic}", full_text, re.I)
+        m = re.search(rf"{tok}.{{0,160}}{generic}", full_text, re.I | re.S)
         if m:
             # last group is the date
             return m.groups()[-1]
@@ -442,7 +442,7 @@ def _split_sections(text: str) -> Dict[str, str]:
     sections: Dict[str, str] = {}
     word_pat = "|".join(SECTION_WORDS.keys())
     sec = re.compile(
-        rf"(?:^|\n)\s*(?:SECTION|Section)?\s*(?:(?P<num>\d{{1,2}})|(?P<word>{word_pat}))[\.:\)]?\s*(?P<body>.*?)\s*(?=(?:\n\s*(?:SECTION|Section)?\s*(?:\d{{1,2}}|{word_pat})[\.:\)]?)|\Z)",
+        rf"(?:^|\n)\s*(?:SECTION|Section)?\s*(?:(?P<num>\d{{1,2}})|(?P<word>{word_pat}))[\.:\)]?\s*(?=[A-Za-z])(?P<body>.*?)\s*(?=(?:\n\s*(?:SECTION|Section)?\s*(?:\d{{1,2}}|{word_pat})(?:[\.:\)]|\s))|\Z)",
         re.I | re.S,
     )
     for m in sec.finditer(text):
