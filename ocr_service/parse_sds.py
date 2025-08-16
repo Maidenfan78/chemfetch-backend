@@ -52,7 +52,10 @@ PATTERNS: Dict[str, re.Pattern] = {
     "product_identifier": re.compile(r"(?:(?:Product\s*(?:name|identifier))|Trade\s*name)\s*[:\-]?\s*(.+)", re.I),
     "product_identifier_alt": re.compile(r"^\s*IDENTIFICATION\s*OF\s*THE\s*SUBSTANCE.*?\n(.*?)\n", re.I | re.S),
     "vendor_block_13": re.compile(r"1\.3\s*(?:Details|Supplier|Manufacturer|Company).*?(?:\n\n|\Z)", re.I | re.S),
-    "product_use": re.compile(r"(?:Recommended\s+use|Uses?\s+of\s+the\s+substance(?:/mixture)?|Product\s+use)\s*[:\-]?\s*(.+)", re.I),
+    "product_use": re.compile(
+        r"(?:Recommended\s+use|Uses?\s+of\s+the\s+substance(?:/mixture)?|Product\s+use)\s*(?:[:\-]\s*)?\n?\s*([^\n]+)",
+        re.I,
+    ),
     # Dangerous goods / transport
     "dg_none": re.compile(r"(?:not\s+(?:subject|regulated)|not\s+classified\s+as\s+dangerous\s+goods)", re.I),
     "dg_class": re.compile(r"(?:Class|Hazard\s*Class(?:es)?)\s*[:\-]?\s*([0-9]{1,2}(?:\.[0-9])?)", re.I),
@@ -513,7 +516,7 @@ def _extract_product_use(sect1: str) -> Optional[str]:
     """Grab recommended use / product use from Section 1."""
     m = PATTERNS["product_use"].search(sect1)
     if m:
-        return m.group(1).strip()
+        return m.group(1).strip().splitlines()[0]
     return None
 
 
